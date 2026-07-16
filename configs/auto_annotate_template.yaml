@@ -1,0 +1,128 @@
+# Auto-Annotate Curation Pipeline Configuration Template
+# Use this configuration file with curation/auto_annotate.py:
+#   PYTHONPATH=. ./.venv/bin/python curation/auto_annotate.py configs/auto_annotate_template.yaml
+
+# -----------------------------------------------------------------------------
+# 1. Dataset Configuration
+# -----------------------------------------------------------------------------
+dataset:
+  # The source format of the dataset. Choose from:
+  # - "flat csv": A local CSV file. Requires 'path' to be specified.
+  # - "hydravision": A dataset registered on the MLP console. Requires 'dataset_name' to be specified.
+  type: flat csv
+
+  # Required if type is "flat csv". Absolute path or path relative to the repo root.
+  path: curated_datasets/TataTrent_Westside/categories/westside_gender_sample_3000.csv
+
+  # Required if type is "hydravision". Specifies the registered dataset name to download.
+  dataset_name: my_hydravision_dataset
+
+  # Whether to load pre-existing bounding boxes and concepts already present in the dataset
+  # (from standard columns 'boxes' and 'concepts').
+  # If true, these bounding boxes are loaded as candidate detections under source "original".
+  keep_bounding_boxes: false
+
+  # Directory where output results (e.g., annotated_dataset.csv) and cache will be saved.
+  output_dir: curated_datasets/TataTrent_Westside/categories/curation/
+
+
+# -----------------------------------------------------------------------------
+# 2. Detection Models Configuration
+# -----------------------------------------------------------------------------
+detection_models:
+  # Local RTMDet Detection model
+  - model_type: fashion_model
+    # Path to local RTMDet model folder containing model.onnx and the threshold file.
+    model_dir: models/product_item_13_04
+    # The threshold configuration filename located inside the model directory (defaults to "threshold.txt").
+    threshold_file: threshold_1301.txt
+    # Optional list of classes to filter and keep from this model. If empty or omitted, keeps all detected classes.
+    classes: [belt, bag, eyewear]
+
+  # Remote API-based Locate Anything Detection model
+  - model_type: locate_anything
+    # Endpoint URL of the locate anything service.
+    api_endpoint: http://localhost:8080/detect_classes
+    # Decoding mode for locate_anything endpoint: "slow", "fast", or "hybrid" (defaults to "slow").
+    decoding_mode: hybrid
+    # Classes to query/filter. The model will only search for and keep these classes.
+    classes: [belt, ring, gloves, hair_accessories, scarf, tie, earring, bracelet, necklace, watch, headwear, bag, eyewear, innertop]
+    # Optional: Max number of classes to query in a single API call request. If specified,
+    # the target classes list is partitioned into chunks of this size.
+    max_classes_per_prompt: 4
+    # Optional: Manually define groupings of classes to query together in separate API requests.
+    # If specified, overrides max_classes_per_prompt chunking.
+    class_groups:
+      - [innertop, bag, eyewear]
+      - [ring, earring, necklace, bracelet]
+      - [belt, headwear, scarf]
+
+
+# -----------------------------------------------------------------------------
+# 3. Deduplication Policy Configuration
+# -----------------------------------------------------------------------------
+# Overlapping boxes of the same class from different/same models are suppressed.
+# Left blank or commented out to disable deduplication entirely.
+dedup_policy:
+  # The fallback policy applied if no class-specific policy override is defined.
+  general:
+    # Intersection over Union (IoU) overlap suppression threshold.
+    IOU: 0.7
+    # Intersection over Minimum (IoMin) overlap suppression threshold.
+    IOMin: 0.7
+    # Resolves overlap ties by sorting priority. Choose from:
+    # - "keep locate anything box": Prioritize locate_anything detections.
+    # - "keep fashion model box": Prioritize fashion_model detections.
+    # - "keep biggest": Prioritize boxes with larger areas.
+    # - "keep smallest": Prioritize boxes with smaller areas.
+    keep_which: keep biggest
+
+  # Class-specific policy overrides (overrides 'general' for this specific class)
+  anklet:
+    IOU: 0.5
+    IOMin: 0.5
+    keep_which: keep smallest
+
+  earring:
+    IOU: 0.4
+    IOMin: 0.4
+    keep_which: keep locate anything box
+
+
+# -----------------------------------------------------------------------------
+# 4. LLM Verification Configuration
+# -----------------------------------------------------------------------------
+# Bounding box crops are sent to an LLM to verify if the target object is present.
+# Left blank or commented out to disable LLM verification entirely.
+llm_validation:
+  # The LLM model name or alias. Translates aliases:
+  # - "nano" -> "gpt-4.1-nano"
+  # - "mini" -> "gpt-4.1-mini"
+  # - "5.4-mini" -> "gpt-5.4-mini"
+  model_type: gpt-4.1-mini
+
+  # Path to the visual prompt text file (defaults to "llm/prompts/verify_classes_prompt.txt").
+  prompt: llm/prompts/verify_classes_prompt.txt
+
+  # Optional list of classes to send to the LLM for verification.
+  # If empty or omitted, all class boxes are validated by the LLM.
+  classes: [earring, ring, necklace]
+
+  # Default image preprocessing settings before cropping the box area.
+  general:
+    # Padding fraction around the bounding box. E.g., 0.1 expands the width and
+    # height by 10% on each side.
+    padding: 0.1
+    # Contrast adjustment strategy. Supported options:
+    # - true or "equalize": Histogram equalization.
+    # - "clahe": Contrast Limited Adaptive Histogram Equalization.
+    # - float value (e.g. 1.5): Scales pixel intensities (contrast multiplier).
+    contrast: clahe
+    # Optional: Integer brightness offset (added to pixel values, e.g. 10 or -5).
+    brightness: 0
+
+  # Class-specific image preprocessing overrides (e.g. earring obstructed by hair benefits from higher contrast)
+  earring:
+    padding: 0.2
+    contrast: 1.5
+    brightness: 15

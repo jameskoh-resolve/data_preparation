@@ -1,0 +1,46 @@
+run:
+  seed: 42
+  output_dir: curated_datasets/TataTrent_Westside/curation
+  save_intermediate: true
+  model_score_threshold: 0.0
+
+model:
+  key: "1304"
+  model_dir: /home/james.koh/workspace/vi-mmdetection/product_item_13_04
+
+catalogs:
+  - name: westside_v1
+    catalog_csv: curated_datasets/TataTrent_Westside/categories/class_sample/human_worn_sample.csv
+    image_url_column: im_url
+    category_column: category
+
+inference:
+  devices: ["0"]
+  per_gpu: 1
+  workers: 0
+  score_thr: 0.0
+  category_overlap_thresh: 0.0
+  detection_limit: -1
+
+classes:
+  relevant_classes:
+    - belt
+    - ring
+    - gloves
+    - hair_accessories
+    - scarf
+    - tie
+    - earring
+    - bracelet
+    - necklace
+    - watch
+    - headwear
+    - bag
+    - eyewear
+    - innertop
+
+clustering:
+  iou_cluster_thresh: 0.3
+
+output:
+  curated_csv: curated_datasets/TataTrent_Westside/curation/curated_issues.csv

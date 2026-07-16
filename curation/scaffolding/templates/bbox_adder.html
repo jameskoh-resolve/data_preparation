@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BBox Editor</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+        .sidebar {
+            width: 300px;
+            background: #1e293b;
+            border-right: 1px solid #334155;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .sidebar-header {
+            padding: 10px 14px;
+            border-bottom: 1px solid #334155;
+            background: #0f172a;
+        }
+        .sidebar-header h2 { font-size: 13px; color: #94a3b8; margin-bottom: 8px; }
+        .filter-tabs { display: flex; gap: 3px; margin-bottom: 8px; }
+        .filter-tab {
+            flex: 1; padding: 4px 4px; border-radius: 4px; border: 1px solid #334155;
+            background: #1e293b; color: #94a3b8; cursor: pointer; font-size: 10px;
+            text-align: center; line-height: 1.4;
+        }
+        .filter-tab.active { background: #1e40af; border-color: #3b82f6; color: #e2e8f0; }
+        .filter-tab .count { font-size: 10px; color: #64748b; }
+        .filter-tab.active .count { color: #93c5fd; }
+        .progress-bar { height: 4px; background: #334155; border-radius: 2px; overflow: hidden; }
+        .progress-bar-fill { height: 100%; background: #22c55e; transition: width 0.3s; }
+        .progress-text { font-size: 11px; color: #64748b; margin-top: 4px; }
+        .image-list { flex: 1; overflow-y: auto; padding: 6px; }
+        .image-item {
+            padding: 7px 9px; border-radius: 5px; cursor: pointer;
+            margin-bottom: 3px; font-size: 11px; border: 1px solid transparent;
+        }
+        .image-item:hover { background: #334155; }
+        .image-item.active { background: #1e40af; border-color: #3b82f6; }
+        .image-item.done::after { content: " \2713"; color: #22c55e; }
+        .image-item.skipped::after { content: " \2013"; color: #64748b; }
+        .tag { display: inline-block; padding: 1px 5px; border-radius: 3px; font-size: 10px; margin-left: 3px; }
+        .tag-recall { background: #b45309; color: white; }
+        .main-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .toolbar {
+            padding: 8px 14px; background: #1e293b; border-bottom: 1px solid #334155;
+            display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+        }
+        .toolbar .info { flex: 1; min-width: 0; }
+        .toolbar .info h3 { font-size: 13px; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .toolbar .info .meta { font-size: 11px; color: #64748b; }
+        .toolbar button {
+            padding: 5px 11px; border-radius: 4px; border: 1px solid #475569;
+            background: #334155; color: #e2e8f0; cursor: pointer; font-size: 12px; white-space: nowrap;
+        }
+        .toolbar button:hover { background: #475569; }
+        .toolbar button.primary { background: #2563eb; border-color: #3b82f6; }
+        .toolbar button.primary:hover { background: #1d4ed8; }
+        .toolbar button.export { background: #16a34a; border-color: #22c55e; }
+        .toolbar button.export:hover { background: #15803d; }
+        .toolbar button.export.has-changes { animation: pulse 2s infinite; }
+        @keyframes pulse {
+            0%,100% { box-shadow: 0 0 0 0 rgba(34,197,94,0.4); }
+            50%      { box-shadow: 0 0 0 4px rgba(34,197,94,0); }
+        }
+        .changes-badge {
+            display: inline-block; background: #f59e0b; color: #000;
+            padding: 0 5px; border-radius: 8px; font-size: 10px; font-weight: 700; margin-left: 3px;
+        }
+        .concept-row { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+        .concept-row label { color: #94a3b8; white-space: nowrap; }
+        .concept-row select {
+            padding: 4px 8px; background: #0f172a; border: 1px solid #475569;
+            border-radius: 4px; color: #e2e8f0; font-size: 12px;
+        }
+        .body-row { flex: 1; display: flex; overflow: hidden; }
+        .canvas-container {
+            flex: 1; position: relative; overflow: hidden;
+            display: flex; align-items: center; justify-content: center; background: #0f172a;
+        }
+        .canvas-wrapper { position: relative; display: inline-block; }
+        .canvas-wrapper img { display: block; }
+        canvas { position: absolute; top: 0; left: 0; cursor: crosshair; }
+        .info-banner {
+            display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;
+            background: rgba(37,99,235,0.85); color: white; margin-top: 4px;
+        }
+        .edit-sidebar {
+            width: 260px; background: #1e293b; border-left: 1px solid #334155;
+            padding: 10px; overflow-y: auto; display: flex; flex-direction: column;
+        }
+        .edit-sidebar h4 { font-size: 11px; color: #94a3b8; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.05em; }
+        .box-entry {
+            display: flex; align-items: center; gap: 5px; padding: 5px 6px;
+            border-radius: 4px; margin-bottom: 3px; font-size: 11px;
+            background: #334155; border: 1px solid transparent;
+        }
+        .box-entry.added { border-color: #22c55e; }
+        .box-entry.removed { opacity: 0.4; text-decoration: line-through; }
+        .box-entry .color-dot { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
+        .box-entry .box-label { flex: 1; font-size: 11px; }
+        .box-entry .box-coords { color: #64748b; font-size: 9px; white-space: nowrap; }
+        .box-entry .remove-btn {
+            background: #dc2626; border: none; color: white;
+            padding: 2px 5px; border-radius: 3px; cursor: pointer; font-size: 10px; flex-shrink: 0;
+        }
+        .box-entry .remove-btn:hover { background: #b91c1c; }
+        .edit-shortcuts {
+            margin-top: auto; padding-top: 10px; font-size: 10px; color: #64748b;
+            line-height: 1.9; border-top: 1px solid #334155;
+        }
+        .edit-shortcuts kbd {
+            background: #334155; padding: 1px 4px; border-radius: 3px;
+            border: 1px solid #475569; color: #94a3b8;
+        }
+        .shortcuts { padding: 6px 14px; background: #1e293b; border-top: 1px solid #334155; font-size: 11px; color: #64748b; }
+        .shortcuts kbd {
+            background: #334155; padding: 1px 5px; border-radius: 3px;
+            border: 1px solid #475569; color: #94a3b8;
+        }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <div class="sidebar-header">
+            <h2>BBox Editor</h2>
+            <div class="filter-tabs" id="filterTabs">
+                <div class="filter-tab active" data-filter="all" onclick="setFilter('all')">All<br><span class="count" id="count-all">0</span></div>
+                <div class="filter-tab" data-filter="recall" onclick="setFilter('recall')">Recall Issues<br><span class="count" id="count-recall">0</span></div>
+            </div>
+            <div class="progress-bar"><div class="progress-bar-fill" id="progressFill"></div></div>
+            <div class="progress-text" id="progressText">Loading...</div>
+        </div>
+        <div class="image-list" id="imageList"></div>
+    </div>
+
+    <div class="main-area">
+        <div class="toolbar">
+            <div class="info">
+                <h3 id="imageName">Loading...</h3>
+                <div class="meta" id="imageMeta"></div>
+                <div class="info-banner" id="infoBanner" style="display:none;"></div>
+            </div>
+            <button onclick="prevImage()">&#8592; Prev</button>
+            <button onclick="nextImage()">Next &#8594;</button>
+            <button onclick="skipImage()">Skip (S)</button>
+            <button class="primary" onclick="undoLastAdded()">Undo (Z)</button>
+            <button class="export" id="exportBtn" onclick="exportCorrections()">
+                Export JSON (E) <span class="changes-badge" id="changesBadge">0</span>
+            </button>
+        </div>
+        <div class="toolbar" style="padding-top:6px;padding-bottom:6px;gap:10px;">
+            <div class="concept-row">
+                <label>Draw concept:</label>
+                <select id="conceptSelect"></select>
+            </div>
+            <span style="font-size:11px;color:#475569;">Draw a box to add it. Click &#10005; in the list to remove any box.</span>
+        </div>
+
+        <div class="body-row">
+            <div class="canvas-container">
+                <div class="canvas-wrapper" id="canvasWrapper">
+                    <img id="mainImage" style="display:block;" />
+                    <canvas id="canvas"></canvas>
+                </div>
+            </div>
+            <div class="edit-sidebar">
+                <h4>Bounding Boxes</h4>
+                <div id="boxList"></div>
+                <div class="edit-shortcuts">
+                    <kbd>Z</kbd> Undo last drawn box<br>
+                    <kbd>&#8592;</kbd> / <kbd>&#8594;</kbd> Prev / Next image<br>
+                    <kbd>S</kbd> Skip (no edit)<br>
+                    <kbd>E</kbd> Export corrections<br>
+                    Draw on image &#8594; adds selected concept<br>
+                    Click <strong>&#10005;</strong> to remove any box<br>
+                    Click <strong>&#8617;</strong> to restore removed box
+                </div>
+            </div>
+        </div>
+
+        <div class="shortcuts">
+            Green border = added &nbsp;|&nbsp; Dashed = existing &nbsp;|&nbsp;
+            Struck-through = marked for removal.
+            Export produces <code>remove</code> + <code>add</code> actions for <code>apply_gt_corrections.py</code>.
+        </div>
+    </div>
+
+    <script>
+    const CONCEPT_COLORS = {
+        anklet: '#0ea5e9',
+        bag: '#ec4899',
+        belt: '#f59e0b',
+        bottom: '#3b82f6',
+        bracelet: '#fb923c',
+        dress: '#f43f5e',
+        earring: '#f472b6',
+        ethnic_wear: '#f97316',
+        eyewear: '#38bdf8',
+        gloves: '#2dd4bf',
+        hair_accessories: '#c084fc',
+        head_jewelry: '#fda4af',
+        headwear: '#a3e635',
+        innertop: '#06b6d4',
+        jewelry_product: '#db2777',
+        necklace: '#a78bfa',
+        onepiece: '#fb7185',
+        outerwear: '#8b5cf6',
+        product_item: '#94a3b8',
+        ring: '#eab308',
+        scarf: '#14b8a6',
+        shoe: '#64748b',
+        skirt: '#d946ef',
+        swimwear: '#4ade80',
+        tie: '#818cf8',
+        top: '#22c55e',
+        underwear_bottom: '#818cf8',
+        underwear_top: '#e879f9',
+        watch: '#fbbf24',
+    };
+    function getColor(c) { return CONCEPT_COLORS[c] || '#9ca3af'; }
+
+    let allData = [], filteredItems = [], currentFilter = 'all', currentIndex = 0;
+    let edits = {}, skippedSet = new Set(), sessionBoxes = [];
+    let imageScale = 1, isDrawing = false, drawStart = null, drawEnd = null;
+
+    function buildConceptSelect() {
+        const sel = document.getElementById('conceptSelect');
+        sel.innerHTML = '';
+        Object.keys(CONCEPT_COLORS).sort().forEach(c => {
+            const opt = document.createElement('option');
+            opt.value = c; opt.textContent = c;
+            sel.appendChild(opt);
+        });
+    }
+
+    async function init() {
+        buildConceptSelect();
+        try {
+            const resp = await fetch(new URL('../corrections/validation_data_bbox_add.json', window.location.href));
+            allData = await resp.json();
+            updateCounts();
+            setFilter('recall');
+        } catch (e) {
+            document.getElementById('imageName').textContent = 'Error loading data: ' + e.message;
+        }
+    }
+
+    function updateCounts() {
+        document.getElementById('count-all').textContent = allData.length;
+        document.getElementById('count-recall').textContent = allData.filter(x => x.filter_reasons.includes('recall')).length;
+    }
+
+    function setFilter(filter) {
+        currentFilter = filter;
+        document.querySelectorAll('.filter-tab').forEach(el =>
+            el.classList.toggle('active', el.dataset.filter === filter));
+        filteredItems = filter === 'all' ? allData
+            : allData.filter(x => x.filter_reasons.includes(filter));
+        buildSidebar();
+        loadImage(0);
+    }
+
+    function buildSidebar() {
+        const list = document.getElementById('imageList');
+        list.innerHTML = '';
+        filteredItems.forEach((item, idx) => {
+            const div = document.createElement('div');
+            div.className = 'image-item';
+            div.id = 'item-' + idx;
+            const tags = item.filter_reasons.map(r => {
+                return '<span class="tag tag-recall">' + r + '</span>';
+            }).join('');
+            div.innerHTML = '<span>' + (idx+1) + '. ' + item.im_name.substring(0,22) + (item.im_name.length>22?'&hellip;':'') + '</span>' + tags;
+            div.onclick = () => loadImage(idx);
+            list.appendChild(div);
+        });
+        updateProgress();
+    }
+
+    function updateProgress() {
+        const done = filteredItems.filter(item =>
+            edits[item.index] !== undefined || skippedSet.has(item.index)).length;
+        const total = filteredItems.length;
+        document.getElementById('progressFill').style.width = (total ? (done/total)*100 : 0) + '%';
+        document.getElementById('progressText').textContent = done + ' / ' + total + ' reviewed';
+        filteredItems.forEach((item, idx) => {
+            const el = document.getElementById('item-' + idx);
+            if (!el) return;
+            el.classList.remove('done', 'skipped');
+            if (edits[item.index] !== undefined) el.classList.add('done');
+            else if (skippedSet.has(item.index)) el.classList.add('skipped');
+        });
+        const n = Object.keys(edits).length;
+        document.getElementById('changesBadge').textContent = n;
+        document.getElementById('exportBtn').classList.toggle('has-changes', n > 0);
+    }
+
+    function getEffectiveBoxes(item) {
+        if (edits[item.index] !== undefined) return edits[item.index];
+        return (item.boxes || []).map((box, i) => ({
+            concept: (item.concepts || [])[i] || '',
+            box: box, isOriginal: true, originalIdx: i
+        }));
+    }
+
+    function loadImage(idx) {
+        if (idx < 0 || idx >= filteredItems.length) return;
+        currentIndex = idx;
+        const item = filteredItems[idx];
+        document.querySelectorAll('.image-item').forEach(el => el.classList.remove('active'));
+        const activeEl = document.getElementById('item-' + idx);
+        if (activeEl) { activeEl.classList.add('active'); activeEl.scrollIntoView({ block: 'nearest' }); }
+        document.getElementById('imageName').textContent = item.im_name;
+        document.getElementById('imageMeta').textContent = 'Row ' + item.index + ' | ' + (item.concepts || []).join(', ');
+
+        let bannerText = item.filter_reasons.map(r => r.toUpperCase()).join(', ');
+        if (item.missing_concepts && item.missing_concepts.length > 0) {
+            bannerText += ' | MISSING: ' + item.missing_concepts.join(', ').toUpperCase();
+            const conceptDropdown = document.getElementById('conceptSelect');
+            if (conceptDropdown && Array.from(conceptDropdown.options).some(opt => opt.value === item.missing_concepts[0])) {
+                conceptDropdown.value = item.missing_concepts[0];
+            }
+        }
+        const bannerEl = document.getElementById('infoBanner');
+        if (bannerText) {
+            bannerEl.style.display = 'inline-block';
+            bannerEl.textContent = bannerText;
+        } else {
+            bannerEl.style.display = 'none';
+        }
+
+        sessionBoxes = getEffectiveBoxes(item);
+        const imgEl = document.getElementById('mainImage');
+        imgEl.onload = () => { resizeCanvas(); renderCanvas(); };
+        imgEl.onerror = () => {
+            document.getElementById('imageName').textContent = 'Failed to load image';
+        };
+        imgEl.src = item.im_url;
+    }
+
+    function resizeCanvas() {
+        const canvas = document.getElementById('canvas');
+        const imgEl = document.getElementById('mainImage');
+        const container = document.getElementById('canvasWrapper').parentElement;
+        imageScale = Math.min((container.clientWidth-40)/imgEl.naturalWidth, (container.clientHeight-40)/imgEl.naturalHeight, 1);
+        const dW = Math.floor(imgEl.naturalWidth * imageScale);
+        const dH = Math.floor(imgEl.naturalHeight * imageScale);
+        imgEl.style.width = dW + 'px'; imgEl.style.height = dH + 'px';
+        canvas.width = dW; canvas.height = dH;
+    }
+
+    function renderCanvas() {
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        sessionBoxes.forEach(entry => {
+            if (entry._removed) return;
+            const [x1,y1,x2,y2] = entry.box;
+            const color = getColor(entry.concept);
+            const x = x1*imageScale, y = y1*imageScale;
+            const w = (x2-x1)*imageScale, h = (y2-y1)*imageScale;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = entry.isOriginal ? 1.5 : 2.5;
+            ctx.setLineDash(entry.isOriginal ? [5,3] : []);
+            ctx.strokeRect(x, y, w, h);
+            ctx.setLineDash([]);
+            const label = entry.isOriginal ? entry.concept : ('+ ' + entry.concept);
+            const fontSize = 11;
+            ctx.font = 'bold ' + fontSize + 'px sans-serif';
+            const tw = ctx.measureText(label).width + 6;
+            ctx.fillStyle = color;
+            ctx.fillRect(x, y - fontSize - 4, tw, fontSize + 4);
+            ctx.fillStyle = '#fff';
+            ctx.fillText(label, x + 3, y - 4);
+        });
+        if (isDrawing && drawStart && drawEnd) {
+            ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2; ctx.setLineDash([4,4]);
+            ctx.strokeRect(Math.min(drawStart.x,drawEnd.x), Math.min(drawStart.y,drawEnd.y),
+                Math.abs(drawEnd.x-drawStart.x), Math.abs(drawEnd.y-drawStart.y));
+            ctx.setLineDash([]);
+        }
+        updateBoxList();
+    }
+
+    function updateBoxList() {
+        document.getElementById('boxList').innerHTML = sessionBoxes.map((entry, i) => {
+            const color = getColor(entry.concept);
+            const removedCls = entry._removed ? ' removed' : '';
+            const addedCls = (!entry.isOriginal && !entry._removed) ? ' added' : '';
+            const label = entry.isOriginal ? entry.concept : ('&#9733; ' + entry.concept);
+            const btn = entry._removed
+                ? '<button class="remove-btn" onclick="restoreBox(' + i + ')" title="Restore">&#8617;</button>'
+                : '<button class="remove-btn" onclick="removeBox(' + i + ')" title="Remove">&#10005;</button>';
+            return '<div class="box-entry' + removedCls + addedCls + '">'
+                + '<span class="color-dot" style="background:' + color + '"></span>'
+                + '<span class="box-label">' + label + '</span>'
+                + '<span class="box-coords">[' + entry.box.join(',') + ']</span>'
+                + btn + '</div>';
+        }).join('');
+    }
+
+    function removeBox(idx) {
+        if (sessionBoxes[idx].isOriginal) {
+            sessionBoxes[idx]._removed = true;
+        } else {
+            sessionBoxes.splice(idx, 1);
+        }
+        saveSession(); renderCanvas(); updateProgress();
+    }
+
+    function restoreBox(idx) {
+        delete sessionBoxes[idx]._removed;
+        saveSession(); renderCanvas(); updateProgress();
+    }
+
+    function undoLastAdded() {
+        for (let i = sessionBoxes.length - 1; i >= 0; i--) {
+            if (!sessionBoxes[i].isOriginal) {
+                sessionBoxes.splice(i, 1);
+                saveSession(); renderCanvas(); updateProgress();
+                return;
+            }
+        }
+    }
+
+    function saveSession() {
+        const item = filteredItems[currentIndex];
+        const hasRemovals = sessionBoxes.some(b => b._removed);
+        const hasAdditions = sessionBoxes.some(b => !b.isOriginal);
+        if (hasRemovals || hasAdditions) {
+            edits[item.index] = sessionBoxes.map(b => Object.assign({}, b));
+        } else {
+            delete edits[item.index];
+        }
+    }
+
+    const canvas = document.getElementById('canvas');
+    canvas.addEventListener('mousedown', e => {
+        isDrawing = true;
+        const r = canvas.getBoundingClientRect();
+        drawStart = { x: e.clientX - r.left, y: e.clientY - r.top };
+        drawEnd = null;
+    });
+    canvas.addEventListener('mousemove', e => {
+        if (!isDrawing) return;
+        const r = canvas.getBoundingClientRect();
+        drawEnd = { x: e.clientX - r.left, y: e.clientY - r.top };
+        renderCanvas();
+    });
+    canvas.addEventListener('mouseup', e => {
+        if (!isDrawing || !drawStart) return;
+        isDrawing = false;
+        const r = canvas.getBoundingClientRect();
+        drawEnd = { x: e.clientX - r.left, y: e.clientY - r.top };
+        const x1 = Math.round(Math.min(drawStart.x, drawEnd.x) / imageScale);
+        const y1 = Math.round(Math.min(drawStart.y, drawEnd.y) / imageScale);
+        const x2 = Math.round(Math.max(drawStart.x, drawEnd.x) / imageScale);
+        const y2 = Math.round(Math.max(drawStart.y, drawEnd.y) / imageScale);
+        if (Math.abs(x2-x1) < 5 || Math.abs(y2-y1) < 5) { drawStart=null; drawEnd=null; renderCanvas(); return; }
+        const concept = document.getElementById('conceptSelect').value;
+        sessionBoxes.push({ concept, box: [x1,y1,x2,y2], isOriginal: false, originalIdx: null });
+        saveSession(); drawStart=null; drawEnd=null; renderCanvas(); updateProgress();
+
+        const item = filteredItems[currentIndex];
+        if (item && item.missing_concepts && item.missing_concepts.length > 1) {
+            const currentIdx = item.missing_concepts.indexOf(concept);
+            if (currentIdx !== -1 && currentIdx < item.missing_concepts.length - 1) {
+                const nextConcept = item.missing_concepts[currentIdx + 1];
+                const conceptDropdown = document.getElementById('conceptSelect');
+                if (conceptDropdown && Array.from(conceptDropdown.options).some(opt => opt.value === nextConcept)) {
+                    conceptDropdown.value = nextConcept;
+                }
+            }
+        }
+    });
+
+    function prevImage() { loadImage(currentIndex - 1); }
+    function nextImage() { loadImage(currentIndex + 1); }
+    function skipImage() {
+        const item = filteredItems[currentIndex];
+        skippedSet.add(item.index); delete edits[item.index];
+        updateProgress(); nextImage();
+    }
+
+    function exportCorrections() {
+        const output = [];
+        for (const [rowIdxStr, boxes] of Object.entries(edits)) {
+            const rowIdx = parseInt(rowIdxStr);
+            const removedIdxs = boxes.filter(b => b.isOriginal && b._removed)
+                .map(b => b.originalIdx).sort((a,b) => b-a);
+            removedIdxs.forEach(idx => output.push({ row_index: rowIdx, action: "remove", concept_index: idx }));
+            boxes.filter(b => !b.isOriginal && !b._removed)
+                .forEach(a => output.push({ row_index: rowIdx, action: "add", concept: a.concept, box: a.box }));
+        }
+        if (output.length === 0) { alert('No changes to export.'); return; }
+        const blob = new Blob([JSON.stringify(output, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = 'bbox_edit_corrections.json'; a.click();
+        URL.revokeObjectURL(url);
+        alert('Exported ' + output.length + ' actions across ' + Object.keys(edits).length + ' images.\n\nRun:\npython corrections/apply_gt_corrections.py bbox_edit_corrections.json');
+    }
+
+    document.addEventListener('keydown', e => {
+        if (['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)) return;
+        switch (e.key) {
+            case 'ArrowLeft':  prevImage(); break;
+            case 'ArrowRight': nextImage(); break;
+            case 'z': case 'Z': undoLastAdded(); break;
+            case 'e': case 'E': exportCorrections(); break;
+            case 's': case 'S': skipImage(); break;
+        }
+    });
+
+    window.addEventListener('resize', () => {
+        if (document.getElementById('mainImage').naturalWidth) { resizeCanvas(); renderCanvas(); }
+    });
+
+    init();
+    </script>
+</body>
+</html>

@@ -1,0 +1,64 @@
+run:
+  seed: 42
+  output_dir: curated_datasets/TataTrent_Westside/categories/curation
+  save_intermediate: true
+  model_score_threshold: 0.0
+
+model:
+  key: "1304"
+  model_dir: models/product_item_13_04
+  threshold_file: threshold_1301.txt
+
+catalogs:
+  - name: westside_v1
+    catalog_csv: curated_datasets/TataTrent_Westside/categories/westside_gender_sample_3000.csv
+    image_url_column: im_url
+    category_column: category
+
+inference:
+  devices: ["0"]
+  per_gpu: 1
+  workers: 8
+  score_thr: 0.0
+  category_overlap_thresh: 0.0
+  detection_limit: -1
+
+classes:
+  relevant_classes:
+    - belt
+    - ring
+    - gloves
+    - hair_accessories
+    - scarf
+    - tie
+    - earring
+    - bracelet
+    - necklace
+    - watch
+    - headwear
+    - bag
+    - eyewear
+    - innertop
+
+clustering:
+  iou_cluster_thresh: 0.3
+
+llm:
+  enabled: true
+  model: gpt-4.1-mini-2025-04-14
+  workers: 4
+  checkpoint_dir: curated_datasets/TataTrent_Westside/categories/curation/llm_anno
+  prompt_path: vms/assets/prompts/identify_classes_prompt_v4.txt
+  available_classes: ""
+
+locate_anything:
+  endpoint_url: "http://localhost:8080/detect_classes"
+  iou_thresh: 0.7
+  io_min_thresh: 0.7
+  batch_processing: true
+  batch_size: 4
+  decoding_mode: "hybrid"
+  max_classes_per_prompt: 4
+
+output:
+  curated_csv: curated_datasets/TataTrent_Westside/categories/curation/curated_issues.csv

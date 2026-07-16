@@ -1,0 +1,8 @@
+You are looking at a cropped image from a fashion catalog.
+
+Task:
+Verify if the target accessory/clothing class '{class_name}' is clearly visible in this crop.
+
+Return a JSON object with keys:
+- is_valid: boolean (true if the class '{class_name}' is clearly present and visible in the cropped image, false otherwise)
+- reason: string (brief explanation of the validation result)

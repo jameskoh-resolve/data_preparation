@@ -1,0 +1,6 @@
+name: fashion_eval_image
+version: 1
+detects: fashion
+is_image_tagging: true
+mlp_version: 5acd2a0307fb4b858a710abc2760c794_1
+mode: object

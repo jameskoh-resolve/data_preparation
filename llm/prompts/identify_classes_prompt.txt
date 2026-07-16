@@ -1,0 +1,31 @@
+You are looking at a single fashion catalog image.
+
+Task:
+Identify which target accessory classes are clearly visible in the image.
+
+Target classes (canonical names):
+{available_classes}
+
+Detailed class definitions (use these strictly):
+- belt: a clothing belt worn around waist/hips, usually with visible leather strap and often buckle. Do not confuse seams, folds, or bag straps as belt.
+- ring: finger ring on a human hand/finger.
+- gloves: gloves or mittens covering human hand(s)/fingers.
+- hair_accessories: obvious worn hair accessory on a person (headband, large hairband, bandana, headscarf). Do NOT count ponytails/hair ties that are not clearly visible as accessory product.
+- scarf: scarf worn around neck/head/shoulder as a textile accessory.
+- tie: necktie/bowtie worn around neck.
+- earring: jewelry attached to ear/lobe. Do NOT mistake hair strands/highlights/specular spots for earrings.
+- bracelet: wrist/arm jewelry band/chain/cuff.
+- necklace: neck jewelry chain/pendant/choker.
+- watch: watch with visible watch face on wrist.
+- headwear: hat/cap/beanie/balaclava (not hair accessories).
+- bag
+- eyewear
+
+Output rules:
+- visible_classes must contain only canonical names from the target classes.
+- Include a class only if it is clearly visible; if uncertain, do not include.
+- Return JSON only.
+
+Return JSON object with keys:
+- visible_classes: list of strings
+- gpt_reason: string
