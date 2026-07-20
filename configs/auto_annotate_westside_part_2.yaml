@@ -28,7 +28,8 @@ detection_models:
       - [outerwear, innertop, ethnic_wear]
       - [shoe, bag]
       - [belt, tie, gloves, eyewear]
-      - [headwear, hair_accessories, scarf]
+      - [headwear, scarf]
+      - [hair_accessories]  # Isolated group: expands to aliases [hijab, headband, headscarf, bandana, large hairband]
       - [earring, necklace]
       - [bracelet, watch]
       - [ring, head_jewelry, anklet]
@@ -52,6 +53,8 @@ dedup_policy:
 llm_validation:
   model_type: gpt-4.1-mini
   prompt: llm/prompts/verify_classes_prompt.txt
+  max_boxes_per_image: 12
+  max_boxes_per_class: 6
   # classes omitted — validates ALL detected classes
   general:
     padding: 0.05

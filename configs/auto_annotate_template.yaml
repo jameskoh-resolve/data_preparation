@@ -111,6 +111,7 @@ llm_validation:
 
   # Path to the visual prompt text file (defaults to "llm/prompts/verify_classes_prompt.txt").
   prompt: llm/prompts/verify_classes_prompt.txt
+  max_boxes_per_image: 12
 
   # Optional list of classes to send to the LLM for verification.
   # If empty or omitted, all class boxes are validated by the LLM.
