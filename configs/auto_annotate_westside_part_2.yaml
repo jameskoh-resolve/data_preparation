@@ -21,13 +21,17 @@ dataset:
 detection_models:
   - model_type: locate_anything
     api_endpoint: http://localhost:8080/detect_classes
-    decoding_mode: slow
+    decoding_mode: hybrid
     class_groups:
-      - [top, bottom, dress, skirt]
+      - [top, bottom]
+      - [dress, skirt]
       - [outerwear, innertop, ethnic_wear]
-      - [shoe, bag, belt, tie, gloves, eyewear]
-      - [headwear, hair_accessories, scarf]  # hair_accessories expanded to aliases below
-      - [earring, necklace, bracelet, watch, ring, head_jewelry, anklet]
+      - [shoe, bag]
+      - [belt, tie, gloves, eyewear]
+      - [headwear, hair_accessories, scarf]
+      - [earring, necklace]
+      - [bracelet, watch]
+      - [ring, head_jewelry, anklet]
     classes: [shoe, top, bottom, outerwear, bag, dress, eyewear, ethnic_wear, headwear, bracelet, watch, skirt, earring, scarf, necklace, belt, gloves, tie, ring, hair_accessories, head_jewelry, anklet, innertop]
     # class_aliases: query the API with subcategory terms and remap to a canonical output class.
     # The canonical name (e.g. hair_accessories) must also be in 'classes' above.

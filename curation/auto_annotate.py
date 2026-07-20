@@ -691,6 +691,14 @@ def validate_detection_with_llm(
         )
         is_valid = bool(parsed.is_valid)
         reason_str = str(getattr(parsed, "reason", "") or "")
+
+        # If LLM rejects due to blurriness, accept detection and flag crop as blurry
+        blurry_keywords = ["blurry", "blurred", "lacks clear detail", "blurry and lacks", "out of focus"]
+        if not is_valid and any(kw in reason_str.lower() for kw in blurry_keywords):
+            is_valid = True
+            reason_str = f"[FLAGGED BLURRY] {reason_str}"
+            logger.info("LLM crop for {} is blurry — accepting detection and flagging.", class_name)
+
         if pred_cache:
             pred_cache.set(cache_key, {"is_valid": is_valid, "reason": reason_str})
         logger.info("LLM validation for {}: is_valid={}, reason={}", class_name, is_valid, reason_str)
@@ -991,32 +999,47 @@ def main(
                 )
                 capped_dets = sorted(capped_dets, key=lambda x: float(x.get("score", 1.0)), reverse=True)[:max_per_img]
 
-            row_dets = capped_dets
-
-            validated_dets = []
-            for d in row_dets:
-                # Check if we should validate this class
-                should_validate = (not llm_classes) or (d["name"].lower() in llm_classes)
-                det_viz = dict(d)
-                if should_validate:
-                    res = validate_detection_with_llm(
-                        image, d, llm_cfg, llm_executor, system_prompt, user_prompt_tmpl,
-                        im_id=im_id, pred_cache=pred_cache
-                    )
-                    is_val = bool(getattr(res, "is_valid", res))
-                    reason_str = str(getattr(res, "reason", "") or "")
-                    det_viz["llm_validated"] = True
-                    det_viz["is_valid"] = is_val
-                    det_viz["reason"] = reason_str
-                    if is_val:
-                        validated_dets.append(d)
-                else:
+            # Check if safety cap is exceeded
+            cap_exceeded = (len(row_dets) > max_per_img) or any(len(c_dets) > max_per_cls for c_dets in dets_by_cls.values())
+            if cap_exceeded:
+                logger.warning(
+                    "Image [{}] has {} candidate boxes exceeding safety cap (max_per_img={}, max_per_cls={}). Skipping LLM validation and flagging image.",
+                    im_url, len(row_dets), max_per_img, max_per_cls
+                )
+                capped_dets = sorted(row_dets, key=lambda x: float(x.get("score", 1.0)), reverse=True)[:max_per_img]
+                for d in capped_dets:
+                    det_viz = dict(d)
                     det_viz["llm_validated"] = False
                     det_viz["is_valid"] = True
-                    det_viz["reason"] = ""
-                    validated_dets.append(d)
-                viz_detections.append(det_viz)
-            row_dets = validated_dets
+                    det_viz["reason"] = "[FLAGGED CAP EXCEEDED] Candidate box safety cap exceeded; LLM validation bypassed."
+                    viz_detections.append(det_viz)
+                row_dets = capped_dets
+            else:
+                row_dets = capped_dets
+                validated_dets = []
+                for d in row_dets:
+                    # Check if we should validate this class
+                    should_validate = (not llm_classes) or (d["name"].lower() in llm_classes)
+                    det_viz = dict(d)
+                    if should_validate:
+                        res = validate_detection_with_llm(
+                            image, d, llm_cfg, llm_executor, system_prompt, user_prompt_tmpl,
+                            im_id=im_id, pred_cache=pred_cache
+                        )
+                        is_val = bool(getattr(res, "is_valid", res))
+                        reason_str = str(getattr(res, "reason", "") or "")
+                        det_viz["llm_validated"] = True
+                        det_viz["is_valid"] = is_val
+                        det_viz["reason"] = reason_str
+                        if is_val:
+                            validated_dets.append(d)
+                    else:
+                        det_viz["llm_validated"] = False
+                        det_viz["is_valid"] = True
+                        det_viz["reason"] = ""
+                        validated_dets.append(d)
+                    viz_detections.append(det_viz)
+                row_dets = validated_dets
         else:
             for d in row_dets:
                 det_viz = dict(d)
