@@ -48,21 +48,104 @@ dedup_policy:
 llm_validation:
   model_type: gpt-4.1-mini
   prompt: llm/prompts/verify_classes_prompt.txt
-  classes: [hair_accessories, earring, innertop, ring]
+  # classes omitted — validates ALL detected classes
   general:
-    padding: 0.0
+    padding: 0.05
 
-  ring:
+  # ── Clothing ───────────────────────────────────────────────────────────────
+
+  top:
+    padding: 0.05
+    task: "Verify if the crop shows a top-half garment (shirt, blouse, t-shirt, tank top, polo) worn on a person's upper body as the main visible top layer. Do NOT classify an innertop worn under outerwear as a standalone top."
+
+  bottom:
+    padding: 0.05
+    task: "Verify if the crop shows a bottom-half garment (trousers, jeans, shorts, leggings, culottes) worn on a person's lower body."
+
+  dress:
+    padding: 0.05
+    task: "Verify if the crop shows a dress — a one-piece garment covering both upper and lower body. Do NOT classify a separate top+bottom combination as a dress."
+
+  skirt:
+    padding: 0.05
+    task: "Verify if the crop shows a skirt as a separate lower-body garment. Must be visually distinct from a dress (no top portion attached)."
+
+  outerwear:
+    padding: 0.05
+    task: "Verify if the crop shows outerwear (jacket, coat, blazer, cardigan, bomber jacket) worn as the outermost layer over other clothing. Must be clearly distinct from a standalone top."
+
+  innertop:
+    padding: 0.4
+    task: "Verify if the item is an innertop — defined as ANY top/shirt/t-shirt/vest that is worn as an inner layer underneath visible outerwear (such as a jacket, coat, blazer, cardigan, or unbuttoned overshirt). The person must be wearing visible outerwear surrounding the top. Do NOT classify standalone tops without outer layers as innertop."
+
+  ethnic_wear:
+    padding: 0.05
+    task: "Verify if the garment shown is ethnic or traditional wear (e.g. saree, kurta, lehenga, salwar kameez, sherwani, dhoti). Do NOT classify Western-style clothing as ethnic_wear."
+
+  # ── Footwear & Accessories ─────────────────────────────────────────────────
+
+  shoe:
+    padding: 0.05
+    task: "Verify if there is a clearly visible shoe, sneaker, boot, sandal, or other footwear on a person's foot/feet."
+
+  bag:
+    padding: 0.05
+    task: "Verify if there is a clearly visible bag, backpack, purse, clutch, or handbag carried by or near a person."
+
+  belt:
+    padding: 0.05
+    task: "Verify if there is a clothing belt clearly visible around a person's waist or hips, typically showing a leather strap or buckle. Do NOT confuse seams, fabric folds, bag straps, or plain waistbands as a belt."
+
+  tie:
+    padding: 0.05
+    task: "Verify if the person is wearing a necktie or bowtie around their neck."
+
+  gloves:
+    padding: 0.05
+    task: "Verify if the person is wearing gloves or mittens clearly covering their hands or fingers."
+
+  scarf:
     padding: 0.1
+    task: "Verify if the person is wearing a scarf draped around their neck, shoulders, or head as a textile accessory. Do NOT confuse a scarf with a collar, lapel, or regular neckline of a top."
+
+  eyewear:
+    padding: 0.1
+    task: "Verify if the person is wearing glasses, sunglasses, or spectacles on their face. The frames or lenses must be clearly visible."
+
+  headwear:
+    padding: 0.1
+    task: "Verify if the person is wearing a hat, cap, beanie, or balaclava on their head. Do NOT classify headbands, hair clips, or hijabs as headwear."
 
   hair_accessories:
-    padding: 0.0
+    padding: 0.05
     task: "Verify if there is an obvious worn hair accessory (e.g. hijab, headband, hairclip, bandana, headscarf) on the person. Do NOT count plain hair ties or hair strands."
+
+  # ── Jewelry ────────────────────────────────────────────────────────────────
 
   earring:
     padding: 0.2
     task: "Verify if jewelry is attached to the ear/lobe. Do NOT mistake hair strands, highlights, or specular spots for earrings."
 
-  innertop:
-    padding: 0.4
-    task: "Verify if the item is an innertop — defined as ANY top/shirt/t-shirt/vest that is worn as an inner layer underneath visible outerwear (such as a jacket, coat, blazer, cardigan, or unbuttoned overshirt). The person must be wearing visible outerwear surrounding the top. Do NOT classify standalone tops without outer layers as innertop."
+  necklace:
+    padding: 0.1
+    task: "Verify if there is a necklace, chain, pendant, or choker clearly visible around a person's neck. It must be a distinct jewelry item, not just a collar or neckline of clothing."
+
+  bracelet:
+    padding: 0.1
+    task: "Verify if there is a bracelet, bangle, cuff, or arm chain clearly visible on a person's wrist or arm."
+
+  watch:
+    padding: 0.1
+    task: "Verify if there is a watch with a clearly visible watch face worn on a person's wrist. A smartwatch or fitness band also counts."
+
+  ring:
+    padding: 0.15
+    task: "Verify if there is a ring clearly visible on a human finger. Do NOT mistake nail polish, skin texture, or background objects for a ring."
+
+  head_jewelry:
+    padding: 0.15
+    task: "Verify if the person is wearing jewelry on their head or forehead (e.g. maang tikka, matha patti, forehead chain, head chain). Do NOT classify headbands, hair clips, or regular headwear as head_jewelry."
+
+  anklet:
+    padding: 0.15
+    task: "Verify if there is a clearly visible anklet or ankle bracelet worn around a person's ankle. Do NOT mistake shoe straps, sock edges, or leg outlines as an anklet."
