@@ -1072,7 +1072,8 @@ def main(
     # 7. Generate HTML visualization
     try:
         from utils.html_visualization import generate_html_visualization
-        html_out = output_dir / f"{output_stem}_visualization.html"
+        viz_filename = dataset_cfg.get("visualization_filename", "visualization.html")
+        html_out = output_dir / viz_filename
         generate_html_visualization(viz_items, html_out, title=f"Auto-Annotate Visualization — {output_stem}")
         logger.info("Generated HTML visualization gallery: {}", html_out)
     except Exception as e:
@@ -1150,7 +1151,8 @@ def generate_visualization_cmd(
         })
 
     output_stem = Path(original_filename).stem
-    html_out = output_dir / f"{output_stem}_visualization.html"
+    viz_filename = dataset_cfg.get("visualization_filename", "visualization.html")
+    html_out = output_dir / viz_filename
     generate_html_visualization(viz_items, html_out, title=f"Auto-Annotate Visualization — {output_stem}")
     logger.info("Saved visualization HTML gallery ({} images) to {}", len(viz_items), html_out)
 
