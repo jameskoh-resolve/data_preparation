@@ -18,11 +18,18 @@ from typing import Any, Dict, Iterable, List, Optional, Set
 import pandas as pd
 import requests
 import typer
+from dotenv import load_dotenv
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from path import Path
 from pydantic import BaseModel, Field
 from tqdm import tqdm
+
+# Load environment credentials from ~/.dltk.config or .env
+_dltk_config = Path.home() / ".dltk.config"
+if _dltk_config.exists():
+    load_dotenv(_dltk_config)
+load_dotenv()
 
 app = typer.Typer(pretty_exceptions_show_locals=False)
 

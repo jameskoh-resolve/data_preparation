@@ -24,9 +24,16 @@ import pandas as pd
 import requests
 import typer
 import yaml
+from dotenv import load_dotenv
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from pydantic import BaseModel, Field
+
+# Load environment credentials from ~/.dltk.config or .env
+_dltk_config = Path.home() / ".dltk.config"
+if _dltk_config.exists():
+    load_dotenv(_dltk_config)
+load_dotenv()
 
 # Ensure repo root is in path
 REPO_ROOT = Path(__file__).resolve().parent.parent

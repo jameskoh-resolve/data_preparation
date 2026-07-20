@@ -299,3 +299,17 @@ dataset:
     result_df = pd.read_csv(expected_csv)
     assert "blob.core.windows.net" in result_df["im_url"].iloc[0]
     assert "sas_token_123" in result_df["im_url"].iloc[0]
+
+
+def test_get_openai_api_key_dynamic(monkeypatch, tmp_path):
+    from llm.executor import _get_openai_api_key
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    
+    # Fake dltk config path
+    dltk_file = tmp_path / ".dltk.config"
+    dltk_file.write_text("OPENAI_API_KEY=sk-test-dltk-key-123\n")
+    
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    key = _get_openai_api_key()
+    assert key == "sk-test-dltk-key-123"
+

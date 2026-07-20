@@ -5,10 +5,15 @@ from __future__ import annotations
 import asyncio
 import os
 from io import BytesIO
+from pathlib import Path
 
 from dotenv import load_dotenv
 
+_dltk_config = Path.home() / ".dltk.config"
+if _dltk_config.exists():
+    load_dotenv(_dltk_config)
 load_dotenv()
+
 from typing import TYPE_CHECKING, Any, Sequence, TypeVar, overload
 
 from langchain.schema import BaseMessage, HumanMessage, SystemMessage
@@ -22,6 +27,20 @@ if TYPE_CHECKING:
     pass
 
 T = TypeVar("T", bound=BaseModel)
+
+
+def _get_openai_api_key(passed_key: str | None = None) -> str:
+    """Dynamically retrieve OpenAI API key, reloading ~/.dltk.config if needed."""
+    if passed_key:
+        return passed_key
+    key = os.getenv("OPENAI_API_KEY", "")
+    if not key:
+        dltk_cfg = Path.home() / ".dltk.config"
+        if dltk_cfg.exists():
+            load_dotenv(dltk_cfg)
+        key = os.getenv("OPENAI_API_KEY", "")
+    return key
+
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
@@ -212,7 +231,8 @@ class LLMExecutor:
         Raises:
             ValueError: If required API key is not set.
         """
-        if not OPENAI_API_KEY:
+        api_key = _get_openai_api_key(kwargs.pop("openai_api_key", None))
+        if not api_key:
             raise ValueError("OPENAI_API_KEY environment variable is not set")
         if _is_reasoning_model(model_name):
             # Reasoning models do not support temperature or top_p — use
@@ -221,20 +241,22 @@ class LLMExecutor:
             # default to 'high' for tasks like image analysis.
             client = ChatOpenAI(
                 model_name=model_name,
-                openai_api_key=OPENAI_API_KEY,
+                openai_api_key=api_key,
                 max_retries=max_retries,
                 max_tokens=max_tokens,
                 reasoning_effort=reasoning_effort or "high",
                 disabled_params={"temperature": None, "top_p": None},
+                **kwargs,
             )
         else:
             client = ChatOpenAI(
                 model_name=model_name,
-                openai_api_key=OPENAI_API_KEY,
+                openai_api_key=api_key,
                 temperature=temperature,
                 max_retries=max_retries,
                 top_p=1,
                 max_tokens=max_tokens,
+                **kwargs,
             )
         return LLMExecutor(client, image_content_cache=image_content_cache)
 
