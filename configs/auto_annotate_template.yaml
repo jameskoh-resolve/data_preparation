@@ -128,6 +128,13 @@ llm_validation:
     contrast: clahe
     # Optional: Integer brightness offset (added to pixel values, e.g. 10 or -5).
     brightness: 0
+    # Optional: minimum crop size fed to the LLM. Tiny crops are upscaled (aspect-ratio preserved).
+    min_crop_short_side: 192
+    min_crop_long_side: 256
+    # Optional interpolation mode for upscaling tiny crops: nearest|linear|area|cubic|lanczos
+    upscale_interpolation: cubic
+    # Optional JPEG encode quality for LLM crops (1-100). Higher preserves detail.
+    jpeg_quality: 98
 
   # Class-specific image preprocessing and prompt/task overrides.
   # For ambiguous classes (e.g. hair_accessories, earring, jewelry), you can specify custom 'task' prompts

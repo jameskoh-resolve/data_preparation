@@ -320,6 +320,40 @@ def prepare_crop(
     return crop
 
 
+def _upscale_crop_if_too_small(
+    crop: np.ndarray,
+    min_short_side: int,
+    min_long_side: int,
+    interpolation: int,
+) -> np.ndarray:
+    """Upscale tiny crops so the LLM can inspect clearer details.
+
+    This keeps aspect ratio and only upscales (never downsamples).
+    """
+    if crop.size == 0:
+        return crop
+
+    h, w = crop.shape[:2]
+    short_side = min(h, w)
+    long_side = max(h, w)
+
+    # No resize needed if the crop already satisfies the configured minima.
+    if short_side >= min_short_side and long_side >= min_long_side:
+        return crop
+
+    # Ensure valid, non-zero targets.
+    target_short = max(1, int(min_short_side))
+    target_long = max(1, int(min_long_side))
+
+    scale_short = target_short / short_side if short_side > 0 else 1.0
+    scale_long = target_long / long_side if long_side > 0 else 1.0
+    scale = max(1.0, scale_short, scale_long)
+
+    new_w = max(1, int(round(w * scale)))
+    new_h = max(1, int(round(h * scale)))
+    return cv2.resize(crop, (new_w, new_h), interpolation=interpolation)
+
+
 def _query_locate_anything_api(
     image_path: str,
     group_classes: List[str],
@@ -527,14 +561,6 @@ def validate_detection_with_llm(
     class_name = det["name"]
     box = det.get("box", [0, 0, 0, 0])
     box_str = f"[{int(round(box[0]))},{int(round(box[1]))},{int(round(box[2]))},{int(round(box[3]))}]"
-    prompt_hash = hashlib.md5((system_prompt + user_prompt_tmpl + str(class_name)).encode()).hexdigest()[:8]
-    cache_key = f"llm:{im_id}:{class_name}:{box_str}:{prompt_hash}"
-
-    if pred_cache:
-        cached_res = pred_cache.get(cache_key)
-        if cached_res is not None:
-            logger.info("LLM validation for {} (cached): is_valid={}, reason={}", class_name, cached_res.get("is_valid"), cached_res.get("reason"))
-            return bool(cached_res.get("is_valid"))
 
     # Get class overrides
     class_override = llm_cfg.get(class_name, {})
@@ -548,6 +574,22 @@ def validate_detection_with_llm(
     padding = float(get_cfg_val("padding", 0.0))
     contrast = get_cfg_val("contrast", None)
     brightness = get_cfg_val("brightness", None)
+    min_crop_short_side = int(get_cfg_val("min_crop_short_side", 192))
+    min_crop_long_side = int(get_cfg_val("min_crop_long_side", 256))
+    jpeg_quality = int(get_cfg_val("jpeg_quality", 98))
+
+    interpolation_name = str(get_cfg_val("upscale_interpolation", "cubic")).strip().lower()
+    interpolation_map = {
+        "nearest": cv2.INTER_NEAREST,
+        "linear": cv2.INTER_LINEAR,
+        "area": cv2.INTER_AREA,
+        "cubic": cv2.INTER_CUBIC,
+        "lanczos": cv2.INTER_LANCZOS4,
+    }
+    interpolation = interpolation_map.get(interpolation_name, cv2.INTER_CUBIC)
+
+    # Keep quality in OpenCV-supported bounds.
+    jpeg_quality = max(1, min(100, jpeg_quality))
 
     # Crop the box
     crop = prepare_crop(image, det["box"], padding=padding, contrast=contrast, brightness=brightness)
@@ -555,8 +597,19 @@ def validate_detection_with_llm(
         logger.warning("Empty crop for detection of class {}, skipping LLM validation", class_name)
         return True
 
+    crop = _upscale_crop_if_too_small(
+        crop,
+        min_short_side=min_crop_short_side,
+        min_long_side=min_crop_long_side,
+        interpolation=interpolation,
+    )
+
     # Encode crop to JPEG bytes
-    success, encoded_img = cv2.imencode(".jpg", crop)
+    success, encoded_img = cv2.imencode(
+        ".jpg",
+        crop,
+        [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality],
+    )
     if not success:
         logger.warning("Failed to encode crop to JPEG for class {}, skipping LLM validation", class_name)
         return True
@@ -580,6 +633,30 @@ def validate_detection_with_llm(
         user_prompt = safe_format(tmpl, class_name=class_name, task_prompt=task_str)
     else:
         user_prompt = safe_format(user_prompt_tmpl, class_name=class_name, task_prompt=task_str)
+
+    # Include effective prompt + preprocessing settings in cache identity.
+    # This ensures cache invalidation when crop quality knobs are changed.
+    cache_signature = {
+        "class_name": class_name,
+        "system_prompt": system_prompt,
+        "user_prompt": user_prompt,
+        "padding": padding,
+        "contrast": contrast,
+        "brightness": brightness,
+        "min_crop_short_side": min_crop_short_side,
+        "min_crop_long_side": min_crop_long_side,
+        "upscale_interpolation": interpolation_name,
+        "jpeg_quality": jpeg_quality,
+        "llm_model": str(llm_cfg.get("model_type", "")),
+    }
+    prompt_hash = hashlib.md5(json.dumps(cache_signature, sort_keys=True, default=str).encode()).hexdigest()[:12]
+    cache_key = f"llm:{im_id}:{class_name}:{box_str}:{prompt_hash}"
+
+    if pred_cache:
+        cached_res = pred_cache.get(cache_key)
+        if cached_res is not None:
+            logger.info("LLM validation for {} (cached): is_valid={}, reason={}", class_name, cached_res.get("is_valid"), cached_res.get("reason"))
+            return bool(cached_res.get("is_valid"))
 
     from langchain.schema import SystemMessage, HumanMessage
     messages = [

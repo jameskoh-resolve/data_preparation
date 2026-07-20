@@ -1,6 +1,7 @@
 import pytest
 import numpy as np
 import pandas as pd
+import cv2
 from unittest.mock import patch, MagicMock, mock_open
 
 from curation.auto_annotate import (
@@ -189,6 +190,9 @@ def test_validate_detection_with_llm(mock_imencode):
     # The cropped region for box [10, 10, 20, 20] with padding 0.2 has size 10 + 2*2 = 14
     # Ensure executor predict was invoked
     executor.predict.assert_called_once()
+    # JPEG encode now includes explicit quality params.
+    assert mock_imencode.call_args[0][0] == ".jpg"
+    assert mock_imencode.call_args[0][2] == [int(cv2.IMWRITE_JPEG_QUALITY), 98]
 
 
 @patch("cv2.imencode")
@@ -218,6 +222,43 @@ def test_validate_detection_with_llm_custom_task(mock_imencode):
     human_msg = call_args[1].content
     assert "Verify if there is an obvious headband on the person." in human_msg
     assert "Class: hair_accessories" in human_msg
+
+
+@patch("cv2.imencode")
+def test_validate_detection_with_llm_upscales_tiny_crop(mock_imencode):
+    mock_imencode.return_value = (True, np.array([1, 2, 3]))
+
+    img = np.zeros((100, 100, 3), dtype=np.uint8)
+    det = {"name": "ring", "box": [10, 10, 14, 14], "score": 0.9}  # 4x4 tiny crop
+
+    llm_cfg = {
+        "general": {
+            "padding": 0.0,
+            "min_crop_short_side": 64,
+            "min_crop_long_side": 96,
+            "upscale_interpolation": "linear",
+            "jpeg_quality": 99,
+        }
+    }
+
+    executor = MagicMock()
+    executor.predict.return_value = VerificationResult(is_valid=True, reason="Visible")
+
+    system_prompt = "You are a visual assistant."
+    user_prompt_tmpl = "Is {class_name} visible?"
+
+    is_valid = validate_detection_with_llm(
+        img, det, llm_cfg, executor, system_prompt, user_prompt_tmpl
+    )
+
+    assert is_valid is True
+
+    # Ensure the encoded image is upscaled from tiny input before sending to the LLM.
+    encoded_crop = mock_imencode.call_args[0][1]
+    h, w = encoded_crop.shape[:2]
+    assert min(h, w) >= 64
+    assert max(h, w) >= 96
+    assert mock_imencode.call_args[0][2] == [int(cv2.IMWRITE_JPEG_QUALITY), 99]
 
 
 @patch("curation.auto_annotate.load_image_and_path")

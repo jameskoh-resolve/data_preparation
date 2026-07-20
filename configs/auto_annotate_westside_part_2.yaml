@@ -51,6 +51,12 @@ llm_validation:
   # classes omitted — validates ALL detected classes
   general:
     padding: 0.05
+    # Upscale tiny crops before LLM validation to reduce "too blurry/unclear" failures.
+    min_crop_short_side: 224
+    min_crop_long_side: 320
+    upscale_interpolation: lanczos
+    # Keep encoding quality high for small detailed accessories.
+    jpeg_quality: 99
 
   # ── Clothing ───────────────────────────────────────────────────────────────
 

@@ -117,3 +117,6 @@ catalogs/*.csv
 curated_datasets/
 product_item_13_04/
 output/
+
+# Ignore all log files
+*.log
