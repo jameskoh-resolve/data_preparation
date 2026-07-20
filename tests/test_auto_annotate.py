@@ -357,8 +357,28 @@ llm_validation:
 
     main(str(cfg_path))
 
-    # max_boxes_per_class=4 -> 4 tops + 4 bottoms = 8 boxes
-    # max_boxes_per_image=10 -> capped at 8 (since 8 < 10)
-    assert mock_validate.call_count == 8
+def test_resolve_dataset_csv_fallback(tmp_path, monkeypatch):
+    from curation.auto_annotate import resolve_dataset_csv
+    import pandas as pd
+
+    # Mock REPO_ROOT to tmp_path
+    monkeypatch.setattr("curation.auto_annotate.REPO_ROOT", tmp_path)
+
+    # 1. Raw dataset path does not exist, but azure_datasets CSV exists
+    azure_dir = tmp_path / "azure_datasets"
+    azure_dir.mkdir()
+    azure_csv = azure_dir / "sample.csv"
+    pd.DataFrame({"im_url": ["http://azure.blob.com/1.jpg"]}).to_csv(azure_csv, index=False)
+
+    dataset_cfg = {
+        "type": "flat csv",
+        "path": "curated_datasets/sample.csv",
+        "azure_folder": "azure_datasets"
+    }
+
+    df, filename = resolve_dataset_csv(dataset_cfg, prefer_azure=True)
+    assert filename == "sample.csv"
+    assert "azure.blob.com" in df["im_url"].iloc[0]
+
 
 

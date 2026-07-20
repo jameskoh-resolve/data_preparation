@@ -603,6 +603,58 @@ def validate_detection_with_llm(
         return False
 
 
+def resolve_dataset_csv(dataset_cfg: dict, prefer_azure: bool = True) -> tuple[pd.DataFrame, str]:
+    """Resolve and read dataset DataFrame from HydraVision or flat CSV.
+
+    Checks:
+    1. azure_datasets/<original_filename>.csv (if prefer_azure=True and file exists)
+    2. REPO_ROOT / path (if relative path exists relative to project root)
+    3. Path(path) (if absolute or cwd-relative path exists)
+    4. Fallback to azure_datasets/<original_filename>.csv if raw path does not exist
+    """
+    dsttype = dataset_cfg.get("type", "flat csv").lower()
+    if dsttype == "hydravision":
+        import data_factory.client.hydravision as hv
+        dataset_name = dataset_cfg.get("dataset_name")
+        if not dataset_name:
+            raise ValueError("dataset_name is required for hydravision dataset type.")
+        logger.info("Retrieving HydraVision dataset: {}", dataset_name)
+        df = hv.HydraVisionGetDataset(dataset_name).read_dataframe()
+        return df, f"{dataset_name}.csv"
+
+    path = dataset_cfg.get("path")
+    if not path:
+        raise ValueError("path is required for flat csv dataset type.")
+
+    original_filename = Path(path).name
+    azure_folder = dataset_cfg.get("azure_folder", "azure_datasets")
+    azure_csv = REPO_ROOT / azure_folder / original_filename
+    repo_path = REPO_ROOT / path
+    direct_path = Path(path)
+
+    if prefer_azure and azure_csv.exists():
+        logger.info("Azure dataset found at {}. Using SAS URLs instead of original path {}.", azure_csv, path)
+        target = azure_csv
+    elif repo_path.exists():
+        logger.info("Reading flat CSV from {}", repo_path)
+        target = repo_path
+    elif direct_path.exists():
+        logger.info("Reading flat CSV from {}", direct_path)
+        target = direct_path
+    elif azure_csv.exists():
+        logger.info("Original path {} not found, but Azure dataset found at {}. Using Azure dataset.", path, azure_csv)
+        target = azure_csv
+    else:
+        raise FileNotFoundError(
+            f"Dataset CSV not found for path '{path}'. "
+            f"Checked relative to repo root ({repo_path}), direct path ({direct_path}), "
+            f"and Azure dataset fallback ({azure_csv})."
+        )
+
+    df = pd.read_csv(target)
+    return df, original_filename
+
+
 @app.command()
 def main(
     config_file: str = typer.Argument(..., help="Path to auto-annotate config YAML"),
@@ -614,32 +666,7 @@ def main(
     dsttype = dataset_cfg.get("type", "flat csv").lower()
 
     # 1. Retrieve dataset
-    if dsttype == "hydravision":
-        import data_factory.client.hydravision as hv
-        dataset_name = dataset_cfg.get("dataset_name")
-        if not dataset_name:
-            raise ValueError("dataset_name is required for hydravision dataset type.")
-        logger.info("Retrieving HydraVision dataset: {}", dataset_name)
-        df = hv.HydraVisionGetDataset(dataset_name).read_dataframe()
-    else:
-        path = dataset_cfg.get("path")
-        if not path:
-            raise ValueError("path is required for flat csv dataset type.")
-
-        # Auto-detect Azure CSV: if prep-azure has already been run, the azure CSV
-        # will exist at azure_datasets/<original_filename>.csv. Prefer it so that
-        # the same single config works both locally (prep) and on the GPU (main).
-        azure_folder = dataset_cfg.get("azure_folder", "azure_datasets")
-        azure_csv = REPO_ROOT / azure_folder / Path(path).name
-        if azure_csv.exists():
-            logger.info(
-                "Azure dataset found at {}. Using SAS URLs instead of original path {}.",
-                azure_csv, path
-            )
-            df = pd.read_csv(azure_csv)
-        else:
-            logger.info("Reading flat CSV from {}", path)
-            df = pd.read_csv(path)
+    df, original_filename = resolve_dataset_csv(dataset_cfg, prefer_azure=True)
 
     if df.empty:
         logger.warning("Input dataset is empty. Exiting.")
@@ -912,21 +939,7 @@ def prefetch_cache(
     """
     cfg = OmegaConf.load(str(config_file))
     dataset_cfg = cfg.get("dataset", {})
-    dsttype = dataset_cfg.get("type", "flat csv").lower()
-
-    if dsttype == "hydravision":
-        import data_factory.client.hydravision as hv
-        dataset_name = dataset_cfg.get("dataset_name")
-        if not dataset_name:
-            raise ValueError("dataset_name is required for hydravision dataset type.")
-        logger.info("Retrieving HydraVision dataset: {}", dataset_name)
-        df = hv.HydraVisionGetDataset(dataset_name).read_dataframe()
-    else:
-        path = dataset_cfg.get("path")
-        if not path:
-            raise ValueError("path is required for flat csv dataset type.")
-        logger.info("Reading flat CSV from {}", path)
-        df = pd.read_csv(path)
+    df, original_filename = resolve_dataset_csv(dataset_cfg, prefer_azure=True)
 
     image_col = None
     for col in ("im_url", "image_url", "url", "image", "original_url"):
@@ -1001,23 +1014,7 @@ def prep_azure(
 
     cfg = OmegaConf.load(str(config_file))
     dataset_cfg = cfg.get("dataset", {})
-    dsttype = dataset_cfg.get("type", "flat csv").lower()
-
-    if dsttype == "hydravision":
-        import data_factory.client.hydravision as hv
-        dataset_name = dataset_cfg.get("dataset_name")
-        if not dataset_name:
-            raise ValueError("dataset_name is required for hydravision dataset type.")
-        logger.info("Retrieving HydraVision dataset: {}", dataset_name)
-        df = hv.HydraVisionGetDataset(dataset_name).read_dataframe()
-        original_filename = f"{dataset_name}.csv"
-    else:
-        path = dataset_cfg.get("path")
-        if not path:
-            raise ValueError("path is required for flat csv dataset type.")
-        logger.info("Reading flat CSV from {}", path)
-        df = pd.read_csv(path)
-        original_filename = Path(path).name
+    df, original_filename = resolve_dataset_csv(dataset_cfg, prefer_azure=False)
 
     # Target output directory & file in azure_datasets
     output_dir = REPO_ROOT / azure_folder if not Path(azure_folder).is_absolute() else Path(azure_folder)
