@@ -34,7 +34,6 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from detection.geometry import compute_iou
-from detection.dataset_utils import download_image
 from utils.vis_image import get_image_content
 from llm.executor import LLMExecutor
 from llm.utils import resolve_model_alias
@@ -91,6 +90,10 @@ def safe_format(template: str, **kwargs) -> str:
 
 
 def parse_existing_boxes_and_concepts(row: pd.Series) -> List[Dict[str, Any]]:
+    if "boxes" not in row.index or "concepts" not in row.index:
+        logger.debug("Row is missing 'boxes' or 'concepts' column; skipping existing detection parsing.")
+        return []
+
     raw_boxes = row.get("boxes")
     raw_concepts = row.get("concepts")
 
@@ -309,15 +312,18 @@ def _query_locate_anything_api(
             if not label or not bbox:
                 continue
 
-            mapped_label = class_to_prompt.get(label, label)
-            if mapped_label not in class_to_prompt:
+            # Map API label back to the original class name (which may have underscores).
+            # class_to_prompt keys are space-separated; values are the raw underscore form.
+            label_norm = label.replace(" ", "_").lower()
+            mapped_label = class_to_prompt.get(label)  # exact match (space form)
+            if mapped_label is None:
+                # Fallback: iterate for case-insensitive / underscore-normalised match
                 for pk, vk in class_to_prompt.items():
-                    if pk.lower() == label.lower():
+                    if pk.lower() == label or pk.replace(" ", "_").lower() == label_norm:
                         mapped_label = vk
                         break
-                    if pk.replace(" ", "_").lower() == label.replace(" ", "_").lower():
-                        mapped_label = vk
-                        break
+            if mapped_label is None:
+                mapped_label = label  # last resort: use as-is
 
             if mapped_label in group_set:
                 api_dets.append({
@@ -397,8 +403,35 @@ def load_image_and_path(im_url: str, cache_dir: Path):
         image = cv2.imread(im_url)
         return image, Path(im_url)
 
-    # Try downloading
-    return download_image(im_url, cache_dir)
+    # Use an MD5-based cache filename so this is consistent with the blob names
+    # written by `prep-azure` (which also uses _stable_image_id for blob paths).
+    # This avoids the slug-based collision where two different URLs sharing the
+    # same path stem would overwrite each other in cache.
+    md5_cache_path = cache_dir / f"{_stable_image_id(im_url)}.jpg"
+    if md5_cache_path.exists():
+        try:
+            image_bytes = md5_cache_path.read_bytes()
+            image = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
+            if image is not None:
+                return image, md5_cache_path
+        except Exception:
+            pass
+
+    # Fetch image bytes and cache with the MD5-based filename
+    image_bytes = get_image_content(im_url, timeout=20)
+    if image_bytes is None:
+        logger.warning("Could not download image from {}", im_url)
+        return None, None
+    try:
+        md5_cache_path.write_bytes(image_bytes)
+        image = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
+        if image is None:
+            logger.warning("Could not decode image from {}", im_url)
+            return None, None
+        return image, md5_cache_path
+    except Exception as exc:
+        logger.warning("Could not process image from {}: {}", im_url, exc)
+        return None, None
 
 
 def validate_detection_with_llm(
@@ -539,6 +572,9 @@ def main(
     llm_classes = []
 
     if llm_cfg:
+        # Convert from OmegaConf DictConfig to a plain dict so that .get() calls
+        # with mutable defaults (e.g. {}) are safe throughout the rest of the pipeline.
+        llm_cfg = OmegaConf.to_container(llm_cfg, resolve=True)
         logger.info("Setting up LLM Validation...")
         model_type = resolve_model_alias(str(llm_cfg.get("model_type", "gpt-4.1-mini")))
         llm_executor = LLMExecutor.from_model_name(model_type)
@@ -576,9 +612,9 @@ def main(
     annotated_rows = []
     logger.info("Processing {} images...", len(df))
 
-    for idx, row in df.iterrows():
+    for i, (idx, row) in enumerate(df.iterrows(), 1):
         im_url = row["im_url"]
-        logger.info("Processing image [{}/{}]: {}", idx + 1, len(df), im_url)
+        logger.info("Processing image [{}/{}]: {}", i, len(df), im_url)
 
         # Download/read image
         image, local_path = load_image_and_path(im_url, cache_dir)
@@ -650,8 +686,16 @@ def main(
             row_dets = validated_dets
 
         # Form final row values
-        concepts_str = ",".join([d["name"] for d in row_dets])
-        boxes_str = ",".join([f"[{int(round(b[0]))},{int(round(b[1]))},{int(round(b[2]))},{int(round(b[3]))}]" for b in [d["box"] for d in row_dets]])
+        # Use None (→ NaN in the CSV) rather than an empty string for missing
+        # detections so downstream column parsers can distinguish "no data" from
+        # "zero detections explicitly annotated".
+        concepts_str = ",".join([d["name"] for d in row_dets]) if row_dets else None
+        boxes_str = (
+            ",".join(
+                [f"[{int(round(b[0]))},{int(round(b[1]))},{int(round(b[2]))},{int(round(b[3]))}]"
+                 for b in [d["box"] for d in row_dets]]
+            ) if row_dets else None
+        )
 
         row_updated = dict(row)
         row_updated["concepts"] = concepts_str
@@ -807,6 +851,12 @@ def prep_azure(
         blob_service_client = BlobServiceClient.from_connection_string(conn_str)
         account_name = blob_service_client.account_name
         account_key = blob_service_client.credential.account_key
+        if not account_key:
+            raise ValueError(
+                "Could not extract account_key from the connection string. "
+                "SAS token generation requires a key-based connection string "
+                "(not a SAS-based or Managed Identity connection string)."
+            )
     elif account_name and account_key:
         blob_service_client = BlobServiceClient(
             account_url=f"https://{account_name}.blob.core.windows.net",
@@ -835,6 +885,12 @@ def prep_azure(
             continue
 
         if "blob.core.windows.net" in url_str:
+            if "?" not in url_str:
+                logger.warning(
+                    "URL {} looks like a private Azure Blob URL without a SAS token. "
+                    "It will be written as-is and may be inaccessible downstream.",
+                    url_str,
+                )
             url_to_sas[url_str] = url_str
             success_count += 1
             continue
