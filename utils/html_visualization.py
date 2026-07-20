@@ -431,6 +431,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <div class="modal-header">
             <h3 id="modalTitle">Image Details</h3>
             <div style="font-size: 11px; color: #94a3b8;" id="modalMeta"></div>
+            <div class="controls-group" style="margin-left:auto;margin-right:16px;">
+                <label><input type="checkbox" id="modalShowBoxes" checked onchange="updateModalView()"> Show Boxes</label>
+                <label><input type="checkbox" id="modalShowLabels" checked onchange="updateModalView()"> Show Labels</label>
+                <label><input type="checkbox" id="modalUseLlmValidation" checked onchange="updateModalView()"> LLM Filtered</label>
+            </div>
             <button class="close-btn" onclick="closeModal()">✕ Close</button>
         </div>
         <div class="modal-body">
@@ -770,21 +775,38 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         const modal = document.getElementById('modal');
         const modalImg = document.getElementById('modalImage');
-        const modalSvg = document.getElementById('modalSvg');
 
         document.getElementById('modalTitle').textContent = `[${globalIdx + 1}/${filteredData.length}] ID: ${item.im_id}`;
         document.getElementById('modalMeta').innerHTML = `<a href="${item.im_url}" target="_blank" style="color:#60a5fa;text-decoration:none;">Open Image Link ↗</a>`;
+
+        // Sync modal checkbox states with main page toolbar states
+        document.getElementById('modalShowBoxes').checked = document.getElementById('showBoxes').checked;
+        document.getElementById('modalShowLabels').checked = document.getElementById('showLabels').checked;
+        document.getElementById('modalUseLlmValidation').checked = document.getElementById('useLlmValidation').checked;
 
         modalImg.src = item.im_url;
         modal.classList.add('active');
 
         modalImg.onload = () => {
-            const useLlmFilter = document.getElementById('useLlmValidation').checked;
-            const showBoxes = document.getElementById('showBoxes').checked;
-            const showLabels = document.getElementById('showLabels').checked;
-            drawSvgBoxes(modalSvg, modalImg, item, useLlmFilter, showBoxes, showLabels);
+            updateModalView();
         };
 
+        renderModalSidebar(item);
+    }
+
+    function updateModalView() {
+        if (activeModalItemIndex < 0) return;
+        const item = filteredData[activeModalItemIndex];
+        if (!item) return;
+
+        const modalImg = document.getElementById('modalImage');
+        const modalSvg = document.getElementById('modalSvg');
+
+        const showBoxes = document.getElementById('modalShowBoxes').checked;
+        const showLabels = document.getElementById('modalShowLabels').checked;
+        const useLlmFilter = document.getElementById('modalUseLlmValidation').checked;
+
+        drawSvgBoxes(modalSvg, modalImg, item, useLlmFilter, showBoxes, showLabels);
         renderModalSidebar(item);
     }
 
@@ -792,7 +814,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         const sidebar = document.getElementById('modalBoxList');
         sidebar.innerHTML = '';
 
-        const useLlmFilter = document.getElementById('useLlmValidation').checked;
+        const useLlmFilter = document.getElementById('modalUseLlmValidation') 
+            ? document.getElementById('modalUseLlmValidation').checked 
+            : document.getElementById('useLlmValidation').checked;
         const dets = getDetectionsForItem(item, useLlmFilter);
 
         if (dets.length === 0) {

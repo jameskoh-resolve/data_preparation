@@ -11,6 +11,8 @@ from curation.auto_annotate import (
     suppress_duplicates,
     prepare_crop,
     run_locate_anything,
+    run_locate_anything_batch,
+    _query_locate_anything_batch_api,
     validate_detection_with_llm,
     safe_format,
     normalize_execution_mode,
@@ -473,6 +475,129 @@ def test_generate_html_visualization(tmp_path):
     assert "test_id_123" in content
     assert "LLM Filtered" in content
     assert "useLlmValidation" in content
+
+
+@patch("requests.post")
+def test_query_locate_anything_batch_api(mock_post, tmp_path):
+    img1 = tmp_path / "img1.jpg"
+    img2 = tmp_path / "img2.jpg"
+    img1.write_bytes(b"dummy image 1")
+    img2.write_bytes(b"dummy image 2")
+
+    mock_response = MagicMock()
+    mock_response.raise_for_status.return_value = None
+    mock_response.json.return_value = {
+        "results": [
+            {"detections": [{"label": "top", "bbox": [0, 0, 10, 10], "score": 0.9}]},
+            {"detections": [{"label": "hijab", "bbox": [5, 5, 15, 15], "score": 0.85}]}
+        ]
+    }
+    mock_post.return_value = mock_response
+
+    classes_list = [[["top"]], [["hijab", "headband"]]]
+    class_to_prompt_maps = [
+        {"top": "top"},
+        {"hijab": "hair_accessories", "headband": "hair_accessories"}
+    ]
+
+    dets = _query_locate_anything_batch_api(
+        image_paths=[str(img1), str(img2)],
+        classes_list=classes_list,
+        class_to_prompt_maps=class_to_prompt_maps,
+        endpoint_url="http://localhost:8080/detect_classes",
+        decoding_mode="slow"
+    )
+
+    assert len(dets) == 2
+    assert dets[0][0]["name"] == "top"
+    assert dets[1][0]["name"] == "hair_accessories"
+    assert mock_post.call_count == 1
+    # Check that endpoint_url was transformed to /detect_classes_batch
+    called_url = mock_post.call_args[0][0]
+    assert called_url == "http://localhost:8080/detect_classes_batch"
+
+
+@patch("curation.auto_annotate._query_locate_anything_batch_api")
+def test_run_locate_anything_batch_with_aliases(mock_batch_api, tmp_path):
+    img1 = tmp_path / "img1.jpg"
+    img2 = tmp_path / "img2.jpg"
+    img1.write_bytes(b"dummy image 1")
+    img2.write_bytes(b"dummy image 2")
+
+    mock_batch_api.return_value = [
+        [{"name": "top", "box": [0, 0, 10, 10], "score": 0.9, "source": "locate_anything"}],
+        [{"name": "hair_accessories", "box": [5, 5, 15, 15], "score": 0.8, "source": "locate_anything"}]
+    ]
+
+    model_cfg = {
+        "classes": ["top", "hair_accessories"],
+        "class_aliases": {
+            "hair_accessories": ["hijab", "headband"]
+        },
+        "use_batch_api": True,
+        "batch_size": 2,
+        "api_endpoint": "http://localhost:8080/detect_classes"
+    }
+
+    batch_items = [("id1", img1), ("id2", img2)]
+    res = run_locate_anything_batch(batch_items, model_cfg)
+
+    assert "id1" in res and "id2" in res
+    assert res["id1"][0]["name"] == "top"
+    assert res["id2"][0]["name"] == "hair_accessories"
+    assert mock_batch_api.call_count == 1
+
+
+@patch("curation.auto_annotate._query_locate_anything_batch_api")
+@patch("curation.auto_annotate._query_locate_anything_api")
+def test_run_locate_anything_batch_fallback_on_error(mock_single_api, mock_batch_api, tmp_path):
+    img1 = tmp_path / "img1.jpg"
+    img1.write_bytes(b"dummy image 1")
+
+    # Batch call fails with exception
+    mock_batch_api.side_effect = RuntimeError("API 500 error")
+
+    # Single call succeeds
+    mock_single_api.return_value = [{"name": "shoe", "box": [1, 1, 5, 5], "score": 0.95, "source": "locate_anything"}]
+
+    model_cfg = {
+        "classes": ["shoe"],
+        "use_batch_api": True,
+        "batch_size": 2,
+        "api_endpoint": "http://localhost:8080/detect_classes"
+    }
+
+    res = run_locate_anything_batch([("id1", img1)], model_cfg)
+    assert "id1" in res
+    assert res["id1"][0]["name"] == "shoe"
+    assert mock_single_api.call_count == 1
+
+
+@patch("curation.auto_annotate.run_locate_anything_batch")
+@patch("curation.auto_annotate._query_locate_anything_api")
+def test_run_locate_anything_dispatcher(mock_single_api, mock_batch_runner, tmp_path):
+    img = tmp_path / "img.jpg"
+    img.write_bytes(b"dummy")
+
+    mock_batch_runner.return_value = {
+        "single_image": [{"name": "bag", "box": [0, 0, 2, 2], "score": 0.8, "source": "locate_anything"}]
+    }
+    mock_single_api.return_value = [
+        {"name": "bag", "box": [0, 0, 2, 2], "score": 0.8, "source": "locate_anything"}
+    ]
+
+    # Case 1: use_batch_api=True, batch_size=8 -> routes to batch runner
+    cfg_batch = {"classes": ["bag"], "use_batch_api": True, "batch_size": 8}
+    dets_batch = run_locate_anything(str(img), cfg_batch)
+    assert len(dets_batch) == 1
+    assert mock_batch_runner.call_count == 1
+
+    # Case 2: use_batch_api=False -> routes to single image API query
+    cfg_single = {"classes": ["bag"], "use_batch_api": False, "batch_size": 8}
+    dets_single = run_locate_anything(str(img), cfg_single)
+    assert len(dets_single) == 1
+    assert mock_single_api.call_count == 1
+
 
 
 

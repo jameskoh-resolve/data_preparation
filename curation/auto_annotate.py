@@ -16,7 +16,7 @@ import re
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import cv2
 import numpy as np
@@ -430,10 +430,180 @@ def _query_locate_anything_api(
     return api_dets
 
 
+def _query_locate_anything_batch_api(
+    image_paths: List[str],
+    classes_list: List[List[List[str]]],
+    class_to_prompt_maps: List[Dict[str, str]],
+    endpoint_url: str,
+    decoding_mode: str,
+) -> List[List[Dict[str, Any]]]:
+    """Execute batch detection across multiple images using nested class sub-prompts."""
+    if endpoint_url.endswith("/detect") or endpoint_url.endswith("/detect_classes"):
+        endpoint_url = re.sub(r"/detect(_classes)?$", "/detect_classes_batch", endpoint_url)
+
+    files = []
+    data = [("decoding_mode", decoding_mode)]
+    opened_files = []
+
+    try:
+        for img_path, img_classes in zip(image_paths, classes_list):
+            f = open(img_path, "rb")
+            opened_files.append(f)
+            files.append(("images", (os.path.basename(img_path), f, "image/jpeg")))
+            data.append(("classes", json.dumps(img_classes)))
+
+        logger.debug("Querying locate_anything_batch at {} with {} images", endpoint_url, len(image_paths))
+        response = requests.post(endpoint_url, files=files, data=data, timeout=120)
+        response.raise_for_status()
+        result = response.json()
+    finally:
+        for f in opened_files:
+            f.close()
+
+    batch_detections = []
+    if isinstance(result, dict) and "results" in result:
+        results_list = result["results"]
+    elif isinstance(result, list):
+        results_list = result
+    else:
+        results_list = []
+
+    for res, class_to_prompt in zip(results_list, class_to_prompt_maps):
+        group_set = set(class_to_prompt.values())
+        api_dets = []
+        dets = res.get("detections", []) if isinstance(res, dict) else []
+        for det in dets:
+            label = str(det.get("label", "")).strip().lower()
+            bbox = det.get("bbox")
+            score = float(det.get("score", 1.0))
+            if not label or not bbox:
+                continue
+
+            mapped_label = class_to_prompt.get(label)
+            if mapped_label is None:
+                label_norm = label.replace(" ", "_").lower()
+                for pk, vk in class_to_prompt.items():
+                    if pk.lower() == label or pk.replace(" ", "_").lower() == label_norm:
+                        mapped_label = vk
+                        break
+            if mapped_label is None:
+                mapped_label = label
+
+            if mapped_label in group_set:
+                api_dets.append({
+                    "name": mapped_label,
+                    "box": bbox,
+                    "score": score,
+                    "source": "locate_anything",
+                })
+        batch_detections.append(api_dets)
+
+    return batch_detections
+
+
+def run_locate_anything_batch(
+    batch_items: List[Tuple[str, Path]],
+    model_cfg: dict,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Execute locate_anything in batch mode across a list of (im_id, local_path) items."""
+    endpoint_url = str(model_cfg.get("api_endpoint", model_cfg.get("endpoint_url", "http://localhost:8080/detect_classes")))
+    decoding_mode = str(model_cfg.get("decoding_mode", "slow"))
+
+    classes = model_cfg.get("classes", [])
+    if not classes:
+        logger.warning("No classes specified for locate_anything detector. Returning empty for batch.")
+        return {im_id: [] for im_id, _ in batch_items}
+
+    class_aliases: dict = model_cfg.get("class_aliases", {})
+    alias_to_canonical: dict = {}
+    for canonical, aliases in class_aliases.items():
+        for alias in (aliases or []):
+            alias_norm = str(alias).strip() if alias is not None else ""
+            if not alias_norm:
+                continue
+            alias_to_canonical[alias_norm] = canonical
+            alias_to_canonical[alias_norm.replace(" ", "_")] = canonical
+
+    class_groups = model_cfg.get("class_groups")
+    max_classes_per_prompt = model_cfg.get("max_classes_per_prompt")
+
+    groups = []
+    if class_groups:
+        groups = class_groups
+    elif max_classes_per_prompt is not None:
+        max_classes = int(max_classes_per_prompt)
+        groups = [classes[i : i + max_classes] for i in range(0, len(classes), max_classes)]
+    else:
+        groups = [classes]
+
+    if class_aliases:
+        expanded_groups = []
+        for group in groups:
+            expanded_group = []
+            for cls in group:
+                if cls in class_aliases:
+                    expanded_group.extend(class_aliases[cls])
+                else:
+                    expanded_group.append(cls)
+            expanded_groups.append(expanded_group)
+        groups = expanded_groups
+
+    # Prepare prompt classes list and class_to_prompt remapping map for each image in batch
+    img_prompt_groups = []
+    for group in groups:
+        prompt_group = [rc.replace("_", " ") for rc in group]
+        img_prompt_groups.append(prompt_group)
+
+    classes_list = [img_prompt_groups for _ in batch_items]
+
+    class_to_prompt = {}
+    for group in groups:
+        for cls in group:
+            prompt_name = cls.replace("_", " ")
+            canonical_name = alias_to_canonical.get(cls) or alias_to_canonical.get(prompt_name) or cls
+            class_to_prompt[prompt_name] = canonical_name
+            class_to_prompt[cls] = canonical_name
+
+    class_to_prompt_maps = [class_to_prompt for _ in batch_items]
+    image_paths = [str(path) for _, path in batch_items]
+
+    results_dict = {}
+    try:
+        batch_dets_list = _query_locate_anything_batch_api(
+            image_paths=image_paths,
+            classes_list=classes_list,
+            class_to_prompt_maps=class_to_prompt_maps,
+            endpoint_url=endpoint_url,
+            decoding_mode=decoding_mode,
+        )
+        for (im_id, _), dets in zip(batch_items, batch_dets_list):
+            results_dict[im_id] = dets
+    except Exception as e:
+        logger.error("Locate anything batch API call failed, falling back to single-image mode: {}", e)
+        # Fallback to single image run_locate_anything
+        for im_id, path in batch_items:
+            try:
+                single_cfg = dict(model_cfg)
+                single_cfg["use_batch_api"] = False
+                results_dict[im_id] = run_locate_anything(str(path), single_cfg)
+            except Exception as single_err:
+                logger.error("Single image fallback failed for {}: {}", path, single_err)
+                results_dict[im_id] = []
+
+    return results_dict
+
+
 def run_locate_anything(
     image_path: str,
     model_cfg: dict,
 ) -> List[Dict[str, Any]]:
+    use_batch_api = bool(model_cfg.get("use_batch_api", True))
+    batch_size = int(model_cfg.get("batch_size", 8))
+
+    if use_batch_api and batch_size > 1:
+        res = run_locate_anything_batch([("single_image", Path(image_path))], model_cfg)
+        return res.get("single_image", [])
+
     endpoint_url = str(model_cfg.get("api_endpoint", model_cfg.get("endpoint_url", "http://localhost:8080/detect_classes")))
     decoding_mode = str(model_cfg.get("decoding_mode", "slow"))
 
@@ -888,6 +1058,36 @@ def main(
     annotated_rows = []
     viz_items = []
     logger.info("Processing {} images...", len(df))
+
+    # Pre-batch run locate_anything detector if use_batch_api is True
+    for model_cfg in detection_models:
+        if model_cfg.get("model_type") == "locate_anything":
+            use_batch_api = bool(model_cfg.get("use_batch_api", True))
+            batch_size = int(model_cfg.get("batch_size", 8))
+            if use_batch_api and batch_size > 1:
+                cfg_hash = hashlib.md5(json.dumps(model_cfg, sort_keys=True, default=str).encode()).hexdigest()[:8]
+                uncached_items = []
+                for _, row in df.iterrows():
+                    im_url = row["im_url"]
+                    im_id = row.get("im_id", _stable_image_id(im_url))
+                    det_cache_key = f"det:{im_id}:locate_anything:{cfg_hash}"
+                    if pred_cache.get(det_cache_key) is None:
+                        img, local_path = load_image_and_path(im_url, cache_dir)
+                        if img is not None and local_path is not None:
+                            uncached_items.append((im_id, local_path))
+                        else:
+                            pred_cache.set(det_cache_key, [])
+
+                if uncached_items:
+                    logger.info("Pre-batch running locate_anything on {} uncached images (batch_size={})", len(uncached_items), batch_size)
+                    for b_idx in range(0, len(uncached_items), batch_size):
+                        batch_chunk = uncached_items[b_idx : b_idx + batch_size]
+                        logger.info("Running locate_anything batch {}/{} ({} images)", b_idx // batch_size + 1, (len(uncached_items) + batch_size - 1) // batch_size, len(batch_chunk))
+                        batch_dets_dict = run_locate_anything_batch(batch_chunk, model_cfg)
+                        for b_im_id, b_dets in batch_dets_dict.items():
+                            b_cache_key = f"det:{b_im_id}:locate_anything:{cfg_hash}"
+                            pred_cache.set(b_cache_key, b_dets)
+                    pred_cache.save()
 
     for i, (idx, row) in enumerate(df.iterrows(), 1):
         im_url = row["im_url"]

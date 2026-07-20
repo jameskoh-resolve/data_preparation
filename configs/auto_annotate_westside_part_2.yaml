@@ -22,6 +22,8 @@ detection_models:
   - model_type: locate_anything
     api_endpoint: http://localhost:8080/detect_classes
     decoding_mode: hybrid
+    use_batch_api: true
+    batch_size: 8
     class_groups:
       - [top, bottom]
       - [dress, skirt]

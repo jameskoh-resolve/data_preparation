@@ -53,6 +53,9 @@ detection_models:
     api_endpoint: http://localhost:8080/detect_classes
     # Decoding mode for locate_anything endpoint: "slow", "fast", or "hybrid" (defaults to "slow").
     decoding_mode: hybrid
+    # Enable/disable batching and set batch size (number of images per API request).
+    use_batch_api: true
+    batch_size: 8
     # Classes to query/filter. The model will only search for and keep these classes.
     classes: [belt, ring, gloves, hair_accessories, scarf, tie, earring, bracelet, necklace, watch, headwear, bag, eyewear, innertop]
     # Optional: Max number of classes to query in a single API call request. If specified,
