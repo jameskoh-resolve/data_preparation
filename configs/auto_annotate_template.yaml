@@ -148,15 +148,23 @@ llm_validation:
     task: "Verify if the crop shows a bottom-half garment (trousers, jeans, shorts, leggings, culottes) worn on a person's lower body. The crop (without padding) must contain a substantial portion (at least 50%) of the bottom garment. Reject tight crops or tiny fragments showing less than 50% of the item."
 
   hair_accessories:
-    padding: 0.2
+    padding: 0.8
     contrast: 1.5
-    task: "Verify if there is an obvious worn hair accessory (e.g. headband, hairclip, bandana, headscarf) on the person. Do NOT count plain hair ties or hair strands."
+    task: "Verify if there is an obvious worn hair accessory (e.g. hijab, headband, hairclip, bandana, headscarf) on the person's head/hair. The crop includes surrounding head context — verify that the hair accessory is clearly worn on the head/hair. Do NOT count plain hair ties, hair strands, or background items."
 
   earring:
-    padding: 0.2
+    padding: 0.8
     contrast: 1.5
     brightness: 15
-    task: "Verify if jewelry is attached to the ear/lobe. Do NOT mistake hair strands, highlights, or specular spots for earrings."
+    task: "Verify if an earring or ear jewelry is clearly attached to a person's ear or earlobe. The crop includes surrounding ear/head context — confirm the item is attached to an earlobe. Do NOT mistake hair strands, skin highlights, or specular spots for earrings."
+
+  bracelet:
+    padding: 0.8
+    task: "Verify if there is a bracelet, bangle, cuff, or arm chain clearly visible on a person's wrist or arm. The crop includes surrounding arm/hand context — confirm the bracelet is worn around a wrist or arm. Do NOT mistake sleeve cuffs or watch straps for a bracelet."
+
+  watch:
+    padding: 0.8
+    task: "Verify if there is a watch worn on a person's wrist AND that a distinct, clearly visible watch face (analog clock face, digital display, or smartwatch screen) is explicitly visible. If the watch face is hidden, turned away, or not clearly visible, mark as INVALID."
 
   ring:
     padding: 1.2

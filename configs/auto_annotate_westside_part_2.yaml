@@ -123,26 +123,26 @@ llm_validation:
     task: "Verify if the person is wearing a hat, cap, beanie, or balaclava on their head. Do NOT classify headbands, hair clips, or hijabs as headwear."
 
   hair_accessories:
-    padding: 0.05
-    task: "Verify if there is an obvious worn hair accessory (e.g. hijab, headband, hairclip, bandana, headscarf) on the person. Do NOT count plain hair ties or hair strands."
+    padding: 0.8
+    task: "Verify if there is an obvious worn hair accessory (e.g. hijab, headband, hairclip, bandana, headscarf) on the person's head/hair. The crop includes surrounding head context — verify that the hair accessory is clearly worn on the head/hair. Do NOT count plain hair ties, hair strands, or background items."
 
   # ── Jewelry ────────────────────────────────────────────────────────────────
 
   earring:
-    padding: 0.2
-    task: "Verify if jewelry is attached to the ear/lobe. Do NOT mistake hair strands, highlights, or specular spots for earrings."
+    padding: 0.8
+    task: "Verify if an earring or ear jewelry is clearly attached to a person's ear or earlobe. The crop includes surrounding ear/head context — confirm the item is attached to an earlobe. Do NOT mistake hair strands, skin highlights, or specular spots for earrings."
 
   necklace:
-    padding: 0.1
+    padding: 0.4
     task: "Verify if there is a necklace, chain, pendant, or choker clearly visible around a person's neck. It must be a distinct jewelry item, not just a collar or neckline of clothing."
 
   bracelet:
-    padding: 0.1
-    task: "Verify if there is a bracelet, bangle, cuff, or arm chain clearly visible on a person's wrist or arm."
+    padding: 0.8
+    task: "Verify if there is a bracelet, bangle, cuff, or arm chain clearly visible on a person's wrist or arm. The crop includes surrounding arm/hand context — confirm the bracelet is worn around a wrist or arm. Do NOT mistake sleeve cuffs or watch straps for a bracelet."
 
   watch:
-    padding: 0.1
-    task: "Verify if there is a watch with a clearly visible watch face worn on a person's wrist. A smartwatch or fitness band also counts."
+    padding: 0.8
+    task: "Verify if there is a watch worn on a person's wrist AND that a distinct, clearly visible watch face (analog clock face, digital display, or smartwatch screen) is explicitly visible. If the watch face is hidden, turned away, or not clearly visible, mark as INVALID."
 
   ring:
     padding: 1.2
