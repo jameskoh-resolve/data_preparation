@@ -35,6 +35,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from detection.geometry import compute_iou
 from detection.dataset_utils import download_image
+from utils.vis_image import get_image_content
 from llm.executor import LLMExecutor
 from llm.utils import resolve_model_alias
 
@@ -725,6 +726,157 @@ def prefetch_cache(
             logger.info("Downloaded/cached [{}/{}] images", idx + 1, len(urls))
 
     logger.info("Prefetch complete. {}/{} images successfully cached in {}", success_count, len(urls), cache_dir)
+
+
+@app.command(name="prep-azure")
+def prep_azure(
+    config_file: str = typer.Argument(..., help="Path to auto-annotate config YAML"),
+    azure_folder: str = typer.Option("azure_datasets", help="Output directory name/path for Azure CSVs"),
+    container_name: Optional[str] = typer.Option(None, help="Azure Blob Storage Container Name"),
+    sas_expiry_days: int = typer.Option(30, help="Days until SAS URL expires"),
+):
+    """Upload dataset images to Azure Blob Storage and generate an Azure CSV with SAS URLs.
+
+    The output CSV is saved in `azure_datasets/` with the exact same filename as the original input CSV
+    (or <dataset_name>.csv for HydraVision datasets).
+    """
+    from datetime import datetime, timedelta, timezone
+    from dotenv import load_dotenv
+
+    # Handle Typer OptionInfo when called directly as Python function
+    if not isinstance(azure_folder, str):
+        azure_folder = getattr(azure_folder, "default", "azure_datasets")
+    if not isinstance(container_name, str):
+        container_name = getattr(container_name, "default", None)
+    if not isinstance(sas_expiry_days, int):
+        try:
+            sas_expiry_days = int(getattr(sas_expiry_days, "default", 30))
+        except Exception:
+            sas_expiry_days = 30
+
+    # Load credentials from ~/.dltk.config or environment
+    load_dotenv(Path.home() / ".dltk.config")
+
+    try:
+        from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions
+    except ImportError:
+        logger.error("azure-storage-blob is not installed. Please run `uv pip install azure-storage-blob`.")
+        sys.exit(1)
+
+    cfg = OmegaConf.load(str(config_file))
+    dataset_cfg = cfg.get("dataset", {})
+    dsttype = dataset_cfg.get("type", "flat csv").lower()
+
+    if dsttype == "hydravision":
+        import data_factory.client.hydravision as hv
+        dataset_name = dataset_cfg.get("dataset_name")
+        if not dataset_name:
+            raise ValueError("dataset_name is required for hydravision dataset type.")
+        logger.info("Retrieving HydraVision dataset: {}", dataset_name)
+        df = hv.HydraVisionGetDataset(dataset_name).read_dataframe()
+        original_filename = f"{dataset_name}.csv"
+    else:
+        path = dataset_cfg.get("path")
+        if not path:
+            raise ValueError("path is required for flat csv dataset type.")
+        logger.info("Reading flat CSV from {}", path)
+        df = pd.read_csv(path)
+        original_filename = Path(path).name
+
+    # Target output directory & file in azure_datasets
+    output_dir = REPO_ROOT / azure_folder if not Path(azure_folder).is_absolute() else Path(azure_folder)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    target_csv_path = output_dir / original_filename
+
+    image_col = None
+    for col in ("im_url", "image_url", "url", "image", "original_url"):
+        if col in df.columns:
+            image_col = col
+            break
+
+    if not image_col:
+        raise ValueError(f"Could not find image URL column in dataset. Available: {list(df.columns)}")
+
+    # Azure credentials setup
+    conn_str = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
+    account_name = os.environ.get("AZURE_STORAGE_ACCOUNT_NAME")
+    account_key = os.environ.get("AZURE_STORAGE_ACCOUNT_KEY")
+    container = container_name or os.environ.get("AZURE_STORAGE_CONTAINER", "dataset-cache")
+
+    if conn_str:
+        blob_service_client = BlobServiceClient.from_connection_string(conn_str)
+        account_name = blob_service_client.account_name
+        account_key = blob_service_client.credential.account_key
+    elif account_name and account_key:
+        blob_service_client = BlobServiceClient(
+            account_url=f"https://{account_name}.blob.core.windows.net",
+            credential=account_key
+        )
+    else:
+        raise ValueError(
+            "Azure credentials not found. Please set AZURE_STORAGE_CONNECTION_STRING or "
+            "AZURE_STORAGE_ACCOUNT_NAME and AZURE_STORAGE_ACCOUNT_KEY in ~/.dltk.config or environment."
+        )
+
+    container_client = blob_service_client.get_container_client(container)
+    if not container_client.exists():
+        logger.info("Creating Azure Blob container: {}", container)
+        container_client.create_container()
+
+    urls = df[image_col].dropna().unique()
+    logger.info("Preparing and uploading {} images to Azure Blob container '{}'...", len(urls), container)
+
+    url_to_sas = {}
+    success_count = 0
+
+    for idx, url in enumerate(urls):
+        url_str = str(url).strip()
+        if not url_str:
+            continue
+
+        if "blob.core.windows.net" in url_str:
+            url_to_sas[url_str] = url_str
+            success_count += 1
+            continue
+
+        blob_name = f"images/{_stable_image_id(url_str)}.jpg"
+        blob_client = container_client.get_blob_client(blob_name)
+
+        try:
+            if not blob_client.exists():
+                image_bytes = get_image_content(url_str, timeout=30)
+                if image_bytes is None:
+                    logger.warning("Failed to fetch image bytes for {}. Keeping original URL.", url_str)
+                    url_to_sas[url_str] = url_str
+                    continue
+                blob_client.upload_blob(image_bytes, overwrite=True)
+
+            sas_token = generate_blob_sas(
+                account_name=account_name,
+                container_name=container,
+                blob_name=blob_name,
+                account_key=account_key,
+                permission=BlobSasPermissions(read=True),
+                expiry=datetime.now(timezone.utc) + timedelta(days=sas_expiry_days)
+            )
+            sas_url = f"https://{account_name}.blob.core.windows.net/{container}/{blob_name}?{sas_token}"
+            url_to_sas[url_str] = sas_url
+            success_count += 1
+        except Exception as err:
+            logger.error("Error processing/uploading image {}: {}", url_str, err)
+            url_to_sas[url_str] = url_str
+
+        if (idx + 1) % 50 == 0 or (idx + 1) == len(urls):
+            logger.info("Processed [{}/{}] images for Azure", idx + 1, len(urls))
+
+    df[image_col] = df[image_col].map(lambda u: url_to_sas.get(str(u).strip(), u))
+
+    df.to_csv(target_csv_path, index=False)
+    logger.info(
+        "Successfully generated Azure CSV with {} SAS image URLs at: {}",
+        success_count,
+        target_csv_path
+    )
 
 
 if __name__ == "__main__":

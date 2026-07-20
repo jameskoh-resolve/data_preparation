@@ -24,3 +24,4 @@ PyYAML
 joblib
 iterative-stratification
 requests-cache>=1.2.1
+azure-storage-blob

@@ -248,3 +248,54 @@ dataset:
     prefetch_cache(str(cfg_path))
     assert mock_load_image.call_count == 2
     assert cache_dir.exists()
+
+
+@patch("curation.auto_annotate.get_image_content")
+@patch("azure.storage.blob.BlobServiceClient")
+@patch("azure.storage.blob.generate_blob_sas")
+def test_prep_azure(mock_gen_sas, mock_blob_service, mock_get_content, tmp_path, monkeypatch):
+    from curation.auto_annotate import prep_azure
+    import pandas as pd
+
+    monkeypatch.setenv("AZURE_STORAGE_CONNECTION_STRING", "UseDevelopmentStorage=true;")
+
+    mock_gen_sas.return_value = "sas_token_123"
+    mock_get_content.return_value = b"fake_image_bytes"
+
+    mock_client_instance = MagicMock()
+    mock_blob_service.from_connection_string.return_value = mock_client_instance
+    mock_client_instance.account_name = "testaccount"
+    mock_client_instance.credential.account_key = "testkey"
+
+    mock_container = MagicMock()
+    mock_container.exists.return_value = True
+    mock_client_instance.get_container_client.return_value = mock_container
+
+    mock_blob = MagicMock()
+    mock_blob.exists.return_value = False
+    mock_container.get_blob_client.return_value = mock_blob
+
+    df = pd.DataFrame({
+        "im_url": ["http://example.com/item1.jpg"]
+    })
+    csv_path = tmp_path / "original_sample.csv"
+    df.to_csv(csv_path, index=False)
+
+    azure_dir = tmp_path / "azure_datasets"
+
+    cfg_path = tmp_path / "config.yaml"
+    cfg_content = f"""
+dataset:
+  type: flat csv
+  path: {str(csv_path)}
+"""
+    cfg_path.write_text(cfg_content)
+
+    prep_azure(str(cfg_path), azure_folder=str(azure_dir))
+
+    expected_csv = azure_dir / "original_sample.csv"
+    assert expected_csv.exists()
+
+    result_df = pd.read_csv(expected_csv)
+    assert "blob.core.windows.net" in result_df["im_url"].iloc[0]
+    assert "sas_token_123" in result_df["im_url"].iloc[0]
