@@ -1123,6 +1123,29 @@ def generate_visualization_cmd(
             if key.startswith(f"det:{im_id}:") and isinstance(val, list):
                 dets.extend(val)
 
+        # Apply deduplication policy across all detection sources (GT + detectors)
+        dedup_cfg = cfg.get("dedup_policy", {})
+        if dedup_cfg and dets:
+            by_class = defaultdict(list)
+            for d in dets:
+                by_class[d["name"]].append(d)
+
+            deduped_dets = []
+            for cls_name, cls_list in by_class.items():
+                class_policy = dedup_cfg.get(cls_name)
+                if class_policy is None:
+                    class_policy = dedup_cfg.get("general")
+
+                if class_policy:
+                    iou_thresh = float(class_policy.get("IOU", 0.7))
+                    io_min_thresh = float(class_policy.get("IOMin", 0.7))
+                    keep_which = str(class_policy.get("keep_which", "keep biggest"))
+                    deduped_cls_list = suppress_duplicates(cls_list, iou_thresh, io_min_thresh, keep_which)
+                    deduped_dets.extend(deduped_cls_list)
+                else:
+                    deduped_dets.extend(cls_list)
+            dets = deduped_dets
+
         # Check predictions cache for LLM validation entries
         viz_dets = []
         for d in dets:
