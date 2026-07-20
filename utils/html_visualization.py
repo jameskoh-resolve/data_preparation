@@ -693,7 +693,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             const box = det.box;
             if (!box || box.length < 4) return;
 
-            const ymin = box[0], xmin = box[1], ymax = box[2], xmax = box[3];
+            const xmin = box[0], ymin = box[1], xmax = box[2], ymax = box[3];
             const w = xmax - xmin;
             const h = ymax - ymin;
             const color = getColor(det.name);
