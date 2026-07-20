@@ -22,7 +22,7 @@ detection_models:
       - [outerwear, innertop, ethnic_wear]
       - [shoe, bag, belt, tie]
       - [headwear, hair_accessories, scarf]  # hair_accessories expanded to aliases below
-      - [earring, necklace, bracelet, watch, anklet, jewelry_product]
+      - [earring, necklace, bracelet, watch, anklet]
       - [ring, gloves, head_jewelry]
     classes: [shoe, top, bottom, outerwear, bag, dress, eyewear, ethnic_wear, headwear, bracelet, watch, skirt, earring, scarf, necklace, belt, gloves, tie, underwear_bottom, swimwear, underwear_top, ring, onepiece, hair_accessories, head_jewelry, anklet, innertop]
     # class_aliases: query the API with subcategory terms and remap to a canonical output class.
@@ -34,6 +34,7 @@ detection_models:
         - headscarf
         - bandana
         - large hairband
+        - hair accessories   # space form — in case the API returns this label directly
 
 dedup_policy:
   general:

@@ -356,7 +356,9 @@ def run_locate_anything(
     alias_to_canonical: dict = {}
     for canonical, aliases in class_aliases.items():
         for alias in (aliases or []):
-            alias_norm = str(alias).strip()
+            alias_norm = str(alias).strip() if alias is not None else ""
+            if not alias_norm:
+                continue  # skip blank entries from YAML e.g. "- "
             alias_to_canonical[alias_norm] = canonical
             alias_to_canonical[alias_norm.replace(" ", "_")] = canonical
     if class_aliases:
