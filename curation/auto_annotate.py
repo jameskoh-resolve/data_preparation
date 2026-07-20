@@ -504,8 +504,8 @@ def validate_detection_with_llm(
         logger.info("LLM validation for {}: is_valid={}, reason={}", class_name, parsed.is_valid, parsed.reason)
         return parsed.is_valid
     except Exception as e:
-        logger.error("LLM validation call failed for class {}: {}", class_name, e)
-        return True
+        logger.error("LLM validation call failed for class {} — dropping detection to fail safe: {}", class_name, e)
+        return False
 
 
 @app.command()
@@ -605,9 +605,32 @@ def main(
             detection_models = [detection_models]
         else:
             detection_models = list(detection_models.values())
+    # Convert each model config from OmegaConf to plain dict
+    detection_models = [
+        OmegaConf.to_container(m, resolve=True) if hasattr(m, "_metadata") else dict(m)
+        for m in detection_models
+    ]
+
+    # Validate class_groups vs classes consistency
+    for m in detection_models:
+        class_groups = m.get("class_groups")
+        classes = m.get("classes", [])
+        if class_groups:
+            grouped = [c for g in class_groups for c in g]
+            extra_in_groups = set(grouped) - set(classes)
+            extra_in_classes = set(classes) - set(grouped)
+            if extra_in_groups or extra_in_classes:
+                logger.warning(
+                    "class_groups and classes are out of sync for model '{}'. "
+                    "In groups but not classes: {}. In classes but not groups: {}.",
+                    m.get("model_type", "?"), sorted(extra_in_groups), sorted(extra_in_classes)
+                )
 
     keep_bbs = bool(dataset_cfg.get("keep_bounding_boxes", False))
     dedup_cfg = cfg.get("dedup_policy", cfg.get("dedup policy", {}))
+    if dedup_cfg:
+        # Convert from OmegaConf to plain dict so .get(cls_name) is safe for all class names
+        dedup_cfg = OmegaConf.to_container(dedup_cfg, resolve=True)
 
     annotated_rows = []
     logger.info("Processing {} images...", len(df))
@@ -619,7 +642,13 @@ def main(
         # Download/read image
         image, local_path = load_image_and_path(im_url, cache_dir)
         if image is None:
-            logger.warning("Failed to load image from {}. Skipping.", im_url)
+            # Preserve the row in the output (with NaN annotations) so the output
+            # CSV stays aligned with the input and downstream positional joins don't break.
+            logger.warning("Failed to load image from {}. Row kept with empty annotations.", im_url)
+            row_updated = dict(row)
+            row_updated["concepts"] = None
+            row_updated["boxes"] = None
+            annotated_rows.append(row_updated)
             continue
 
         # Start with existing boxes if configured
@@ -637,11 +666,14 @@ def main(
                 except Exception as e:
                     logger.error("Fashion model execution failed: {}", e)
             elif model_type == "locate_anything":
-                try:
-                    locate_dets = run_locate_anything(str(local_path), model_cfg)
-                    row_dets.extend(locate_dets)
-                except Exception as e:
-                    logger.error("Locate anything execution failed: {}", e)
+                if local_path is None:
+                    logger.warning("local_path is None for {}; skipping locate_anything.", im_url)
+                else:
+                    try:
+                        locate_dets = run_locate_anything(str(local_path), model_cfg)
+                        row_dets.extend(locate_dets)
+                    except Exception as e:
+                        logger.error("Locate anything execution failed: {}", e)
 
         # 4. Apply deduplication policy
         if dedup_cfg and row_dets:
@@ -702,9 +734,15 @@ def main(
         row_updated["boxes"] = boxes_str
         annotated_rows.append(row_updated)
 
-    # 6. Save results
+    # 6. Save results — derive output filename from the input source so repeated
+    # runs don't silently overwrite each other.
+    if dsttype == "hydravision":
+        output_stem = dataset_cfg.get("dataset_name", "annotated_dataset")
+    else:
+        input_path = dataset_cfg.get("path", "annotated_dataset")
+        output_stem = Path(input_path).stem
+    output_path = output_dir / f"{output_stem}_annotated.csv"
     out_df = pd.DataFrame(annotated_rows)
-    output_path = output_dir / "annotated_dataset.csv"
     out_df.to_csv(output_path, index=False)
     logger.info("Auto-annotation pipeline finished. Saved {} annotated rows to {}", len(out_df), output_path)
 
