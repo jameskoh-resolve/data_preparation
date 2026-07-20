@@ -157,3 +157,7 @@ llm_validation:
     contrast: 1.5
     brightness: 15
     task: "Verify if jewelry is attached to the ear/lobe. Do NOT mistake hair strands, highlights, or specular spots for earrings."
+
+  ring:
+    padding: 1.2
+    task: "Verify if there is a ring clearly visible worn on a human finger. The crop includes surrounding hand context — confirm that the ring is attached to a human finger on a hand. Do NOT mistake nail polish, skin texture, background objects, or loose standalone objects as a worn ring."

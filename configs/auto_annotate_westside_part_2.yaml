@@ -145,8 +145,8 @@ llm_validation:
     task: "Verify if there is a watch with a clearly visible watch face worn on a person's wrist. A smartwatch or fitness band also counts."
 
   ring:
-    padding: 0.15
-    task: "Verify if there is a ring clearly visible on a human finger. Do NOT mistake nail polish, skin texture, or background objects for a ring."
+    padding: 1.2
+    task: "Verify if there is a ring clearly visible worn on a human finger. The crop includes surrounding hand context — confirm that the ring is attached to a human finger on a hand. Do NOT mistake nail polish, skin texture, background objects, or loose standalone objects as a worn ring."
 
   head_jewelry:
     padding: 0.15
