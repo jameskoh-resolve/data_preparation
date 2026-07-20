@@ -313,3 +313,52 @@ def test_get_openai_api_key_dynamic(monkeypatch, tmp_path):
     key = _get_openai_api_key()
     assert key == "sk-test-dltk-key-123"
 
+
+@patch("curation.auto_annotate.validate_detection_with_llm")
+@patch("curation.auto_annotate.load_image_and_path")
+@patch("curation.auto_annotate.run_locate_anything")
+@patch("llm.executor.LLMExecutor.from_model_name")
+def test_auto_annotate_safety_caps(mock_llm_factory, mock_locate, mock_load_img, mock_validate, tmp_path):
+    from curation.auto_annotate import main
+    import pandas as pd
+    import numpy as np
+
+    # Mock single image with 15 candidate boxes for top and 15 for bottom
+    mock_load_img.return_value = (np.zeros((100, 100, 3), dtype=np.uint8), tmp_path / "img.jpg")
+    
+    dets = []
+    for i in range(15):
+        dets.append({"name": "top", "box": [0, 0, 10, 10], "score": 0.5 + i * 0.01})
+    for i in range(15):
+        dets.append({"name": "bottom", "box": [10, 10, 20, 20], "score": 0.5 + i * 0.01})
+    
+    mock_locate.return_value = dets
+    mock_validate.return_value = True
+
+    csv_path = tmp_path / "data.csv"
+    pd.DataFrame({"im_url": ["http://example.com/test.jpg"]}).to_csv(csv_path, index=False)
+
+    cfg_path = tmp_path / "config.yaml"
+    cfg_content = f"""
+dataset:
+  type: flat csv
+  path: {str(csv_path)}
+  output_dir: {str(tmp_path)}
+
+detection_models:
+  - model_type: locate_anything
+
+llm_validation:
+  model_type: gpt-4.1-mini
+  max_boxes_per_image: 10
+  max_boxes_per_class: 4
+"""
+    cfg_path.write_text(cfg_content)
+
+    main(str(cfg_path))
+
+    # max_boxes_per_class=4 -> 4 tops + 4 bottoms = 8 boxes
+    # max_boxes_per_image=10 -> capped at 8 (since 8 < 10)
+    assert mock_validate.call_count == 8
+
+

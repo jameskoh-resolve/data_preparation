@@ -759,8 +759,36 @@ def main(
 
             row_dets = deduped_dets
 
-        # 5. Apply LLM validation
+        # 5. Apply LLM validation (with candidate box count safety caps)
         if llm_executor and row_dets:
+            max_per_img = int(llm_cfg.get("max_boxes_per_image", 20))
+            max_per_cls = int(llm_cfg.get("max_boxes_per_class", 6))
+
+            # Cap candidate boxes per class per image first
+            capped_dets = []
+            dets_by_cls = defaultdict(list)
+            for d in row_dets:
+                dets_by_cls[d["name"]].append(d)
+
+            for cls_name, cls_dets in dets_by_cls.items():
+                if len(cls_dets) > max_per_cls:
+                    logger.warning(
+                        "Image [{}] has {} candidate boxes for class '{}', exceeding max_boxes_per_class ({}). Truncating to top {}.",
+                        im_url, len(cls_dets), cls_name, max_per_cls, max_per_cls
+                    )
+                    cls_dets = sorted(cls_dets, key=lambda x: float(x.get("score", 1.0)), reverse=True)[:max_per_cls]
+                capped_dets.extend(cls_dets)
+
+            # Cap total candidate boxes per image
+            if len(capped_dets) > max_per_img:
+                logger.warning(
+                    "Image [{}] has {} total candidate boxes, exceeding max_boxes_per_image ({}). Truncating to top {}.",
+                    im_url, len(capped_dets), max_per_img, max_per_img
+                )
+                capped_dets = sorted(capped_dets, key=lambda x: float(x.get("score", 1.0)), reverse=True)[:max_per_img]
+
+            row_dets = capped_dets
+
             validated_dets = []
             for d in row_dets:
                 # Check if we should validate this class
