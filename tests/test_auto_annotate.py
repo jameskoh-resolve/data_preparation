@@ -189,3 +189,62 @@ def test_validate_detection_with_llm(mock_imencode):
     # The cropped region for box [10, 10, 20, 20] with padding 0.2 has size 10 + 2*2 = 14
     # Ensure executor predict was invoked
     executor.predict.assert_called_once()
+
+
+@patch("cv2.imencode")
+def test_validate_detection_with_llm_custom_task(mock_imencode):
+    mock_imencode.return_value = (True, np.array([1, 2, 3]))
+
+    img = np.zeros((100, 100, 3), dtype=np.uint8)
+    det = {"name": "hair_accessories", "box": [10, 10, 20, 20], "score": 0.9}
+
+    llm_cfg = {
+        "hair_accessories": {
+            "task": "Verify if there is an obvious headband on the person."
+        }
+    }
+
+    executor = MagicMock()
+    executor.predict.return_value = VerificationResult(is_valid=True, reason="Headband present")
+
+    system_prompt = "You are a visual assistant."
+    user_prompt_tmpl = "Task:\n{task_prompt}\nClass: {class_name}"
+
+    is_valid = validate_detection_with_llm(
+        img, det, llm_cfg, executor, system_prompt, user_prompt_tmpl
+    )
+    assert is_valid is True
+    call_args = executor.predict.call_args[0][0]
+    human_msg = call_args[1].content
+    assert "Verify if there is an obvious headband on the person." in human_msg
+    assert "Class: hair_accessories" in human_msg
+
+
+@patch("curation.auto_annotate.load_image_and_path")
+def test_prefetch_cache(mock_load_image, tmp_path):
+    from curation.auto_annotate import prefetch_cache
+    import pandas as pd
+
+    df = pd.DataFrame({
+        "im_url": ["http://example.com/img1.jpg", "http://example.com/img2.jpg"]
+    })
+    csv_path = tmp_path / "dataset.csv"
+    df.to_csv(csv_path, index=False)
+
+    cache_dir = tmp_path / "custom_cache"
+
+    cfg_path = tmp_path / "config.yaml"
+    cfg_content = f"""
+dataset:
+  type: flat csv
+  path: {str(csv_path)}
+  cache_dir: {str(cache_dir)}
+  output_dir: {str(tmp_path)}
+"""
+    cfg_path.write_text(cfg_content)
+
+    mock_load_image.return_value = (np.zeros((10, 10, 3), dtype=np.uint8), cache_dir / "img.jpg")
+
+    prefetch_cache(str(cfg_path))
+    assert mock_load_image.call_count == 2
+    assert cache_dir.exists()

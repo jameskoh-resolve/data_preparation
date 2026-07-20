@@ -20,10 +20,18 @@ dataset:
   # Whether to load pre-existing bounding boxes and concepts already present in the dataset
   # (from standard columns 'boxes' and 'concepts').
   # If true, these bounding boxes are loaded as candidate detections under source "original".
-  keep_bounding_boxes: false
+  keep_bounding_boxes: true
 
-  # Directory where output results (e.g., annotated_dataset.csv) and cache will be saved.
+  # Directory where output results (e.g., annotated_dataset.csv) will be saved.
   output_dir: curated_datasets/TataTrent_Westside/categories/curation/
+
+  # Optional custom directory for cached downloaded images. Defaults to output_dir/cache.
+  # Use this when running on isolated GPU servers without VIS storage access:
+  # 1. Pre-download images on a connected machine:
+  #    PYTHONPATH=. ./.venv/bin/python curation/auto_annotate.py prefetch configs/my_config.yaml
+  # 2. Transfer this cache directory to your GPU server.
+  # 3. Run auto_annotate.py on the GPU server — it will automatically read from this local cache.
+  cache_dir: curated_datasets/TataTrent_Westside/categories/curation/cache/
 
 
 # -----------------------------------------------------------------------------
@@ -121,8 +129,16 @@ llm_validation:
     # Optional: Integer brightness offset (added to pixel values, e.g. 10 or -5).
     brightness: 0
 
-  # Class-specific image preprocessing overrides (e.g. earring obstructed by hair benefits from higher contrast)
+  # Class-specific image preprocessing and prompt/task overrides.
+  # For ambiguous classes (e.g. hair_accessories, earring, jewelry), you can specify custom 'task' prompts
+  # to give precise instructions to the LLM. If not specified, it defaults to checking if '{class_name}' is visible.
+  hair_accessories:
+    padding: 0.2
+    contrast: 1.5
+    task: "Verify if there is an obvious worn hair accessory (e.g. headband, hairclip, bandana, headscarf) on the person. Do NOT count plain hair ties or hair strands."
+
   earring:
     padding: 0.2
     contrast: 1.5
     brightness: 15
+    task: "Verify if jewelry is attached to the ear/lobe. Do NOT mistake hair strands, highlights, or specular spots for earrings."

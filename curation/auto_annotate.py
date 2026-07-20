@@ -47,16 +47,36 @@ class VerificationResult(BaseModel):
 
 
 class DetectorRegistry:
-    _rtmdet_instances = {}
+    _detector_instances = {}
 
     @classmethod
-    def get_rtmdet(cls, model_dir: str, threshold_file: str):
+    def get_detector(cls, model_dir: str, threshold_file: str):
         key = (model_dir, threshold_file)
-        if key not in cls._rtmdet_instances:
-            logger.info("Loading RTMDetDetect from {} with threshold file {}", model_dir, threshold_file)
-            from detection.rtmdet_detect import RTMDetDetect
-            cls._rtmdet_instances[key] = RTMDetDetect(model_dir=model_dir, threshold_file=threshold_file)
-        return cls._rtmdet_instances[key]
+        if key not in cls._detector_instances:
+            model_dir_path = Path(model_dir)
+            network_info_path = model_dir_path / "weardex_network_info.txt"
+            detector_type = "centernet"
+            if network_info_path.exists():
+                try:
+                    net_type = network_info_path.read_text().strip().lower()
+                    if net_type in ("rtmdet", "simple"):
+                        detector_type = net_type
+                except Exception:
+                    pass
+
+            logger.info("Loading {} detector from {} with threshold file {}", detector_type, model_dir, threshold_file)
+            if detector_type == "rtmdet":
+                from detection.rtmdet_detect import RTMDetDetect
+                detector = RTMDetDetect(model_dir=str(model_dir_path), threshold_file=threshold_file)
+            elif detector_type == "simple":
+                from detection.simple_detect import SimpleDetect
+                detector = SimpleDetect(model_dir=str(model_dir_path), threshold_file=threshold_file)
+            else:
+                from detection.centernet_detect import CenterNetDetect
+                detector = CenterNetDetect(model_dir=str(model_dir_path), threshold_file=threshold_file)
+
+            cls._detector_instances[key] = detector
+        return cls._detector_instances[key]
 
 
 def _stable_image_id(im_url: str) -> str:
@@ -349,7 +369,7 @@ def run_fashion_model(image: np.ndarray, model_cfg: dict) -> List[Dict[str, Any]
         raise ValueError("model_dir is required for fashion_model detector")
 
     threshold_file = model_cfg.get("threshold_file", "threshold.txt")
-    detector = DetectorRegistry.get_rtmdet(model_dir, threshold_file)
+    detector = DetectorRegistry.get_detector(model_dir, threshold_file)
 
     results = detector.detect(image)
 
@@ -416,7 +436,24 @@ def validate_detection_with_llm(
         return True
     crop_bytes = encoded_img.tobytes()
 
-    user_prompt = safe_format(user_prompt_tmpl, class_name=class_name)
+    # Determine class-specific task or prompt override
+    custom_task = class_override.get("task", class_override.get("task_prompt", None))
+    custom_prompt = class_override.get("prompt", None)
+
+    if custom_task:
+        task_str = safe_format(str(custom_task), class_name=class_name)
+    else:
+        task_str = f"Verify if the target accessory/clothing class '{class_name}' is clearly visible in this crop."
+
+    if custom_prompt:
+        prompt_val = str(custom_prompt)
+        if os.path.exists(prompt_val):
+            tmpl = Path(prompt_val).read_text().strip()
+        else:
+            tmpl = prompt_val
+        user_prompt = safe_format(tmpl, class_name=class_name, task_prompt=task_str)
+    else:
+        user_prompt = safe_format(user_prompt_tmpl, class_name=class_name, task_prompt=task_str)
 
     from langchain.schema import SystemMessage, HumanMessage
     messages = [
@@ -485,7 +522,12 @@ def main(
     # Initialize cache dir
     output_dir = Path(dataset_cfg.get("output_dir", REPO_ROOT / "curated_datasets/curation"))
     output_dir.mkdir(parents=True, exist_ok=True)
-    cache_dir = output_dir / "cache"
+    
+    custom_cache = dataset_cfg.get("cache_dir")
+    if custom_cache:
+        cache_dir = Path(custom_cache)
+    else:
+        cache_dir = output_dir / "cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # 2. Setup LLM if validation configured
@@ -620,6 +662,69 @@ def main(
     output_path = output_dir / "annotated_dataset.csv"
     out_df.to_csv(output_path, index=False)
     logger.info("Auto-annotation pipeline finished. Saved {} annotated rows to {}", len(out_df), output_path)
+
+
+@app.command(name="prefetch")
+def prefetch_cache(
+    config_file: str = typer.Argument(..., help="Path to auto-annotate config YAML"),
+):
+    """Pre-download all images in the dataset into the local cache folder.
+
+    Run this command on a machine with VIS/internet access before transferring
+    the repo / cache directory to an isolated GPU server.
+    """
+    cfg = OmegaConf.load(str(config_file))
+    dataset_cfg = cfg.get("dataset", {})
+    dsttype = dataset_cfg.get("type", "flat csv").lower()
+
+    if dsttype == "hydravision":
+        import data_factory.client.hydravision as hv
+        dataset_name = dataset_cfg.get("dataset_name")
+        if not dataset_name:
+            raise ValueError("dataset_name is required for hydravision dataset type.")
+        logger.info("Retrieving HydraVision dataset: {}", dataset_name)
+        df = hv.HydraVisionGetDataset(dataset_name).read_dataframe()
+    else:
+        path = dataset_cfg.get("path")
+        if not path:
+            raise ValueError("path is required for flat csv dataset type.")
+        logger.info("Reading flat CSV from {}", path)
+        df = pd.read_csv(path)
+
+    image_col = None
+    for col in ("im_url", "image_url", "url", "image", "original_url"):
+        if col in df.columns:
+            image_col = col
+            break
+
+    if not image_col:
+        raise ValueError(f"Could not find image URL column in dataset. Available: {list(df.columns)}")
+
+    output_dir = Path(dataset_cfg.get("output_dir", REPO_ROOT / "curated_datasets/curation"))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    custom_cache = dataset_cfg.get("cache_dir")
+    if custom_cache:
+        cache_dir = Path(custom_cache)
+    else:
+        cache_dir = output_dir / "cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    urls = df[image_col].dropna().unique()
+    logger.info("Prefetching {} images into cache directory: {}", len(urls), cache_dir)
+
+    success_count = 0
+    for idx, url in enumerate(urls):
+        url_str = str(url).strip()
+        if not url_str:
+            continue
+        img, path_obj = load_image_and_path(url_str, cache_dir)
+        if img is not None:
+            success_count += 1
+        if (idx + 1) % 50 == 0 or (idx + 1) == len(urls):
+            logger.info("Downloaded/cached [{}/{}] images", idx + 1, len(urls))
+
+    logger.info("Prefetch complete. {}/{} images successfully cached in {}", success_count, len(urls), cache_dir)
 
 
 if __name__ == "__main__":
