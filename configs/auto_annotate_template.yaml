@@ -139,6 +139,14 @@ llm_validation:
   # Class-specific image preprocessing and prompt/task overrides.
   # For ambiguous classes (e.g. hair_accessories, earring, jewelry), you can specify custom 'task' prompts
   # to give precise instructions to the LLM. If not specified, it defaults to checking if '{class_name}' is visible.
+  top:
+    padding: 0.0
+    task: "Verify if the crop shows a top-half garment (shirt, blouse, t-shirt, tank top, polo) worn on a person's upper body as the main visible top layer. The crop (without padding) must contain a substantial portion (at least 50%) of the top garment. Reject tight crops or tiny fragments showing less than 50% of the item."
+
+  bottom:
+    padding: 0.0
+    task: "Verify if the crop shows a bottom-half garment (trousers, jeans, shorts, leggings, culottes) worn on a person's lower body. The crop (without padding) must contain a substantial portion (at least 50%) of the bottom garment. Reject tight crops or tiny fragments showing less than 50% of the item."
+
   hair_accessories:
     padding: 0.2
     contrast: 1.5

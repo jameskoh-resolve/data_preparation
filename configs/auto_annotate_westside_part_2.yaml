@@ -61,32 +61,32 @@ llm_validation:
   # ── Clothing ───────────────────────────────────────────────────────────────
 
   top:
-    padding: 0.05
-    task: "Verify if the crop shows a top-half garment (shirt, blouse, t-shirt, tank top, polo) worn on a person's upper body as the main visible top layer. Do NOT classify an innertop worn under outerwear as a standalone top."
+    padding: 0.0
+    task: "Verify if the crop shows a top-half garment (shirt, blouse, t-shirt, tank top, polo) worn on a person's upper body as the main visible top layer. The crop (without padding) must contain a substantial portion (at least 50%) of the top garment. Reject tight crops or tiny fragments showing less than 50% of the item. Do NOT classify an innertop worn under outerwear as a standalone top."
 
   bottom:
-    padding: 0.05
-    task: "Verify if the crop shows a bottom-half garment (trousers, jeans, shorts, leggings, culottes) worn on a person's lower body."
+    padding: 0.0
+    task: "Verify if the crop shows a bottom-half garment (trousers, jeans, shorts, leggings, culottes) worn on a person's lower body. The crop (without padding) must contain a substantial portion (at least 50%) of the bottom garment. Reject tight crops or tiny fragments showing less than 50% of the item."
 
   dress:
-    padding: 0.05
-    task: "Verify if the crop shows a dress — a one-piece garment covering both upper and lower body. Do NOT classify a separate top+bottom combination as a dress."
+    padding: 0.0
+    task: "Verify if the crop shows a dress — a one-piece garment covering both upper and lower body. The crop (without padding) must contain a substantial portion (at least 50%) of the dress. Reject tight crops or fragments showing less than 50% of the dress. Do NOT classify a separate top+bottom combination as a dress."
 
   skirt:
-    padding: 0.05
-    task: "Verify if the crop shows a skirt as a separate lower-body garment. Must be visually distinct from a dress (no top portion attached)."
+    padding: 0.0
+    task: "Verify if the crop shows a skirt as a separate lower-body garment (visually distinct from a dress). The crop (without padding) must contain a substantial portion (at least 50%) of the skirt. Reject tight crops or fragments showing less than 50% of the item."
 
   outerwear:
-    padding: 0.05
-    task: "Verify if the crop shows outerwear (jacket, coat, blazer, cardigan, bomber jacket) worn as the outermost layer over other clothing. Must be clearly distinct from a standalone top."
+    padding: 0.0
+    task: "Verify if the crop shows outerwear (jacket, coat, blazer, cardigan, bomber jacket) worn as the outermost layer over other clothing. The crop (without padding) must contain a substantial portion (at least 50%) of the outerwear garment. Reject tight crops or fragments showing less than 50% of the item."
 
   innertop:
-    padding: 0.4
-    task: "Verify if the item is an innertop — defined as ANY top/shirt/t-shirt/vest that is worn as an inner layer underneath visible outerwear (such as a jacket, coat, blazer, cardigan, or unbuttoned overshirt). The person must be wearing visible outerwear surrounding the top. Do NOT classify standalone tops without outer layers as innertop."
+    padding: 0.05
+    task: "Verify if the item is an innertop — defined as ANY top/shirt/t-shirt/vest worn as an inner layer underneath visible outerwear (such as a jacket, coat, blazer, cardigan, or unbuttoned overshirt). The crop must show a substantial portion (at least 50%) of the innertop garment along with surrounding visible outerwear. Do NOT classify standalone tops without outer layers as innertop."
 
   ethnic_wear:
-    padding: 0.05
-    task: "Verify if the garment shown is ethnic or traditional wear (e.g. saree, kurta, lehenga, salwar kameez, sherwani, dhoti). Do NOT classify Western-style clothing as ethnic_wear."
+    padding: 0.0
+    task: "Verify if the garment shown is ethnic or traditional wear (e.g. saree, kurta, lehenga, salwar kameez, sherwani, dhoti). The crop (without padding) must contain a substantial portion (at least 50%) of the ethnic garment. Do NOT classify Western-style clothing as ethnic_wear."
 
   # ── Footwear & Accessories ─────────────────────────────────────────────────
 
