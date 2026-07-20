@@ -78,6 +78,47 @@ PYTHONPATH=. .venv/bin/python curation/auto_annotate.py main configs/auto_annota
 
 The script automatically detects the prepared CSV in `azure_datasets/` and outputs the curated dataset to `output/westside/`.
 
+### 3b. Optional Two-Pass Workflow (Detection First, LLM Later)
+
+Use this when you want to run detection-heavy work on Azure first, then run the LLM-heavy pass locally while reusing cache.
+
+1. Run detection-only on Azure (fills detector cache keys in `predictions_cache.json`):
+```bash
+PYTHONPATH=. .venv/bin/python curation/auto_annotate.py main configs/auto_annotate_westside_part_2.yaml --mode detection_only
+```
+
+2. Run full mode on local machine with the same config and cache path:
+```bash
+PYTHONPATH=. .venv/bin/python curation/auto_annotate.py main configs/auto_annotate_westside_part_2.yaml --mode full
+```
+
+Notes:
+- Keep only one running process writing to the same cache file at a time.
+- `detection_only` writes `<dataset>_detections_only.csv`.
+- `full` writes `<dataset>_annotated.csv`.
+- The same `output/.../cache/predictions_cache.json` stores both detector (`det:*`) and LLM (`llm:*`) cache entries.
+
+### 3c. Commands vs Modes (CLI Usage)
+
+The auto-annotate CLI has two layers:
+
+1. **Command layer** (subcommands)
+- `prep-azure`: prepares/uploads images and writes Azure SAS CSV.
+- `prefetch`: pre-downloads images into local cache.
+- `main`: runs the annotation pipeline.
+
+2. **Mode layer** (only used with `main`)
+- `--mode full`: detection + dedup + LLM validation.
+- `--mode detection_only`: detection + dedup only.
+
+Examples:
+```bash
+PYTHONPATH=. .venv/bin/python curation/auto_annotate.py prep-azure configs/auto_annotate_westside_part_2.yaml
+PYTHONPATH=. .venv/bin/python curation/auto_annotate.py prefetch configs/auto_annotate_westside_part_2.yaml
+PYTHONPATH=. .venv/bin/python curation/auto_annotate.py main configs/auto_annotate_westside_part_2.yaml --mode detection_only
+PYTHONPATH=. .venv/bin/python curation/auto_annotate.py main configs/auto_annotate_westside_part_2.yaml --mode full
+```
+
 ---
 
 ### Prediction & Image Caching

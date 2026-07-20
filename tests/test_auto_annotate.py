@@ -13,6 +13,7 @@ from curation.auto_annotate import (
     run_locate_anything,
     validate_detection_with_llm,
     safe_format,
+    normalize_execution_mode,
     _stable_image_id,
     VerificationResult
 )
@@ -31,6 +32,17 @@ def test_safe_format():
     tmpl = "Verify if the class '{class_name}' is visible. Braces like {other_key} should be safe."
     res = safe_format(tmpl, class_name="belt")
     assert res == "Verify if the class 'belt' is visible. Braces like {other_key} should be safe."
+
+
+def test_normalize_execution_mode_valid():
+    assert normalize_execution_mode("full") == "full"
+    assert normalize_execution_mode(" detection_only ") == "detection_only"
+    assert normalize_execution_mode("FULL") == "full"
+
+
+def test_normalize_execution_mode_invalid():
+    with pytest.raises(ValueError):
+        normalize_execution_mode("llm_only")
 
 
 def test_parse_existing_boxes_and_concepts():

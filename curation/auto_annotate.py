@@ -131,6 +131,14 @@ def safe_format(template: str, **kwargs) -> str:
     return template
 
 
+def normalize_execution_mode(mode: str) -> str:
+    normalized = str(mode or "").strip().lower()
+    allowed = {"full", "detection_only"}
+    if normalized not in allowed:
+        raise ValueError(f"Invalid mode '{mode}'. Allowed modes: {sorted(allowed)}")
+    return normalized
+
+
 def parse_existing_boxes_and_concepts(row: pd.Series) -> List[Dict[str, Any]]:
     if "boxes" not in row.index or "concepts" not in row.index:
         logger.debug("Row is missing 'boxes' or 'concepts' column; skipping existing detection parsing.")
@@ -735,9 +743,16 @@ def resolve_dataset_csv(dataset_cfg: dict, prefer_azure: bool = True) -> tuple[p
 @app.command()
 def main(
     config_file: str = typer.Argument(..., help="Path to auto-annotate config YAML"),
+    mode: str = typer.Option(
+        "full",
+        "--mode",
+        help="Execution mode: 'full' runs detection+LLM, 'detection_only' runs detection+dedup only.",
+    ),
 ):
     """Run the auto-annotation curation pipeline."""
     cfg = OmegaConf.load(str(config_file))
+    execution_mode = normalize_execution_mode(mode)
+    logger.info("Execution mode: {}", execution_mode)
 
     dataset_cfg = cfg.get("dataset", {})
     dsttype = dataset_cfg.get("type", "flat csv").lower()
@@ -780,14 +795,14 @@ def main(
     use_pred_cache = bool(dataset_cfg.get("use_prediction_cache", True))
     pred_cache = PredictionCache(pred_cache_file, enabled=use_pred_cache)
 
-    # 2. Setup LLM if validation configured
+    # 2. Setup LLM if validation is enabled for this execution mode
     llm_cfg = cfg.get("llm_validation", cfg.get("llm validation"))
     llm_executor = None
     system_prompt = ""
     user_prompt_tmpl = ""
     llm_classes = []
 
-    if llm_cfg:
+    if execution_mode == "full" and llm_cfg:
         # Convert from OmegaConf DictConfig to a plain dict so that .get() calls
         # with mutable defaults (e.g. {}) are safe throughout the rest of the pipeline.
         llm_cfg = OmegaConf.to_container(llm_cfg, resolve=True)
@@ -812,6 +827,8 @@ def main(
             system_prompt = "You are a visual validation assistant."
 
         llm_classes = [c.lower() for c in llm_cfg.get("classes", [])]
+    elif execution_mode == "detection_only":
+        logger.info("Detection-only mode active. Skipping LLM validation stage.")
 
     # 3. Process each row
     detection_models = cfg.get("detection_models", cfg.get("detection models", []))
@@ -999,10 +1016,16 @@ def main(
     else:
         input_path = dataset_cfg.get("path", "annotated_dataset")
         output_stem = Path(input_path).stem
-    output_path = output_dir / f"{output_stem}_annotated.csv"
+    output_suffix = "_annotated.csv" if execution_mode == "full" else "_detections_only.csv"
+    output_path = output_dir / f"{output_stem}{output_suffix}"
     out_df = pd.DataFrame(annotated_rows)
     out_df.to_csv(output_path, index=False)
-    logger.info("Auto-annotation pipeline finished. Saved {} annotated rows to {}", len(out_df), output_path)
+    logger.info(
+        "Auto-annotation pipeline finished in mode '{}'. Saved {} rows to {}",
+        execution_mode,
+        len(out_df),
+        output_path,
+    )
 
 
 @app.command(name="prefetch")
