@@ -18,13 +18,22 @@ detection_models:
     api_endpoint: http://localhost:8080/detect_classes
     decoding_mode: slow
     class_groups:
-      - [top, bottom, outerwear, dress, skirt]
-      - [innertop, onepiece, ethnic_wear, swimwear, underwear_top, underwear_bottom]
-      - [shoe, bag, product_item]
-      - [headwear, eyewear, hair_accessories, scarf]
-      - [earring, necklace, head_jewelry, tie]
-      - [ring, bracelet, watch, belt, gloves, anklet, jewelry_product]
-    classes: [shoe, top, product_item, bottom, outerwear, bag, dress, eyewear, ethnic_wear, headwear, bracelet, watch, skirt, earring, jewelry_product, scarf, necklace, belt, gloves, tie, underwear_bottom, swimwear, underwear_top, ring, onepiece, hair_accessories, head_jewelry, anklet, innertop]
+      - [top, bottom, dress, skirt]
+      - [outerwear, innertop, ethnic_wear]
+      - [shoe, bag, belt, tie]
+      - [headwear, hair_accessories, scarf]  # hair_accessories expanded to aliases below
+      - [earring, necklace, bracelet, watch, anklet, jewelry_product]
+      - [ring, gloves, head_jewelry]
+    classes: [shoe, top, bottom, outerwear, bag, dress, eyewear, ethnic_wear, headwear, bracelet, watch, skirt, earring, scarf, necklace, belt, gloves, tie, underwear_bottom, swimwear, underwear_top, ring, onepiece, hair_accessories, head_jewelry, anklet, innertop]
+    # class_aliases: query the API with subcategory terms and remap to a canonical output class.
+    # The canonical name (e.g. hair_accessories) must also be in 'classes' above.
+    class_aliases:
+      hair_accessories:
+        - hijab
+        - headband
+        - headscarf
+        - bandana
+        - large hairband
 
 dedup_policy:
   general:
@@ -44,7 +53,7 @@ llm_validation:
 
   hair_accessories:
     padding: 0.0
-    task: "Verify if there is an obvious worn hair accessory (e.g. headband, hairclip, bandana, headscarf) on the person. Do NOT count plain hair ties or hair strands."
+    task: "Verify if there is an obvious worn hair accessory (e.g. hijab, headband, hairclip, bandana, headscarf) on the person. Do NOT count plain hair ties or hair strands."
 
   earring:
     padding: 0.2

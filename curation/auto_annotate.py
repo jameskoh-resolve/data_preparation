@@ -349,6 +349,19 @@ def run_locate_anything(
         logger.warning("No classes specified for locate_anything detector. Returning empty.")
         return []
 
+    # class_aliases: maps a canonical output class to a list of query terms to send to the API.
+    # e.g.  hair_accessories: [hijab, headband, headscarf, bandana, large hairband]
+    # The API is queried with the alias terms; returned detections are remapped to the canonical name.
+    class_aliases: dict = model_cfg.get("class_aliases", {})
+    alias_to_canonical: dict = {}
+    for canonical, aliases in class_aliases.items():
+        for alias in (aliases or []):
+            alias_norm = str(alias).strip()
+            alias_to_canonical[alias_norm] = canonical
+            alias_to_canonical[alias_norm.replace(" ", "_")] = canonical
+    if class_aliases:
+        logger.debug("class_aliases active: {}", class_aliases)
+
     class_groups = model_cfg.get("class_groups")
     max_classes_per_prompt = model_cfg.get("max_classes_per_prompt")
 
@@ -362,10 +375,33 @@ def run_locate_anything(
     else:
         groups = [classes]
 
+    # Expand canonical names that have aliases: replace the canonical name in each group
+    # with the alias query terms so the API is prompted with the specific subcategories.
+    if class_aliases:
+        expanded_groups = []
+        for group in groups:
+            expanded_group = []
+            for cls in group:
+                if cls in class_aliases:
+                    expanded_group.extend(class_aliases[cls])
+                else:
+                    expanded_group.append(cls)
+            expanded_groups.append(expanded_group)
+        groups = expanded_groups
+
     all_dets = []
     for group in groups:
         group_dets = _query_locate_anything_api(image_path, group, endpoint_url, decoding_mode)
         all_dets.extend(group_dets)
+
+    # Remap alias detections back to their canonical class name
+    if alias_to_canonical:
+        for det in all_dets:
+            name = det["name"]
+            canonical = alias_to_canonical.get(name) or alias_to_canonical.get(name.replace("_", " "))
+            if canonical:
+                logger.debug("Remapping '{}' -> '{}'", name, canonical)
+                det["name"] = canonical
 
     return all_dets
 
