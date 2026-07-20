@@ -137,8 +137,8 @@ llm_validation:
     task: "Verify if there is a necklace, chain, pendant, or choker clearly visible around a person's neck. It must be a distinct jewelry item, not just a collar or neckline of clothing."
 
   bracelet:
-    padding: 0.8
-    task: "Verify if there is a bracelet, bangle, cuff, or arm chain clearly visible on a person's wrist or arm. The crop includes surrounding arm/hand context — confirm the bracelet is worn around a wrist or arm. Do NOT mistake sleeve cuffs or watch straps for a bracelet."
+    padding: 0.5
+    task: "Verify if there is any bracelet, bangle, cuff, wristband, string/thread band, or arm chain visible on a person's wrist or arm. Accept any wrist/arm jewelry item or band."
 
   watch:
     padding: 0.8
