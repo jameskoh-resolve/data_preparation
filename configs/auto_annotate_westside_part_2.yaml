@@ -1,9 +1,22 @@
+# Auto-annotate config for TataTrent Westside part 2.
+#
+# Workflow (single config for both steps):
+#
+#   1. Prep images on a machine with internet access (uploads to Azure, generates SAS URLs):
+#        PYTHONPATH=. .venv/bin/python curation/auto_annotate.py prep-azure configs/auto_annotate_westside_part_2.yaml
+#
+#   2. Commit + push, then on the Azure GPU (git pull):
+#        PYTHONPATH=. .venv/bin/python curation/auto_annotate.py main configs/auto_annotate_westside_part_2.yaml
+#
+#      The script auto-detects azure_datasets/curated_issues_final_part_2.csv and uses it.
+#      No separate GPU config needed.
+
 dataset:
   type: flat csv
   path: curated_datasets/TataTrent_Westside/curation/curated_issues_final_part_2.csv
   keep_bounding_boxes: true
   output_dir: output/westside/
-  cache_dir: output/westside/cache/
+  # azure_folder: azure_datasets  # (default) where prep-azure writes the Azure CSV
 
 detection_models:
   - model_type: locate_anything

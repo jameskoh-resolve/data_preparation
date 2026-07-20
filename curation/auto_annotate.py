@@ -568,8 +568,21 @@ def main(
         path = dataset_cfg.get("path")
         if not path:
             raise ValueError("path is required for flat csv dataset type.")
-        logger.info("Reading flat CSV from {}", path)
-        df = pd.read_csv(path)
+
+        # Auto-detect Azure CSV: if prep-azure has already been run, the azure CSV
+        # will exist at azure_datasets/<original_filename>.csv. Prefer it so that
+        # the same single config works both locally (prep) and on the GPU (main).
+        azure_folder = dataset_cfg.get("azure_folder", "azure_datasets")
+        azure_csv = REPO_ROOT / azure_folder / Path(path).name
+        if azure_csv.exists():
+            logger.info(
+                "Azure dataset found at {}. Using SAS URLs instead of original path {}.",
+                azure_csv, path
+            )
+            df = pd.read_csv(azure_csv)
+        else:
+            logger.info("Reading flat CSV from {}", path)
+            df = pd.read_csv(path)
 
     if df.empty:
         logger.warning("Input dataset is empty. Exiting.")
