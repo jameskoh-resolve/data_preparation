@@ -90,6 +90,41 @@ def _stable_image_id(im_url: str) -> str:
     return hashlib.md5(str(im_url).encode("utf-8")).hexdigest()[:16]
 
 
+class PredictionCache:
+    """Persistent JSON cache for model predictions (detector outputs & LLM verification)."""
+
+    def __init__(self, cache_file: Path, enabled: bool = True):
+        self.cache_file = Path(cache_file)
+        self.enabled = enabled
+        self._data: dict[str, Any] = {}
+        if self.enabled and self.cache_file.exists():
+            try:
+                self._data = json.loads(self.cache_file.read_text())
+                logger.info("Loaded {} cached prediction entries from {}", len(self._data), self.cache_file)
+            except Exception as e:
+                logger.warning("Failed to load prediction cache from {}: {}", self.cache_file, e)
+
+    def get(self, key: str) -> Any | None:
+        if not self.enabled:
+            return None
+        return self._data.get(key)
+
+    def set(self, key: str, value: Any) -> None:
+        if not self.enabled:
+            return
+        self._data[key] = value
+
+    def save(self) -> None:
+        if not self.enabled:
+            return
+        try:
+            self.cache_file.parent.mkdir(parents=True, exist_ok=True)
+            self.cache_file.write_text(json.dumps(self._data, indent=2))
+        except Exception as e:
+            logger.warning("Failed to save prediction cache to {}: {}", self.cache_file, e)
+
+
+
 def safe_format(template: str, **kwargs) -> str:
     for k, v in kwargs.items():
         template = template.replace("{" + k + "}", str(v))
@@ -486,8 +521,20 @@ def validate_detection_with_llm(
     executor,
     system_prompt: str,
     user_prompt_tmpl: str,
+    im_id: str = "",
+    pred_cache: Optional[PredictionCache] = None,
 ) -> bool:
     class_name = det["name"]
+    box = det.get("box", [0, 0, 0, 0])
+    box_str = f"[{int(round(box[0]))},{int(round(box[1]))},{int(round(box[2]))},{int(round(box[3]))}]"
+    prompt_hash = hashlib.md5((system_prompt + user_prompt_tmpl + str(class_name)).encode()).hexdigest()[:8]
+    cache_key = f"llm:{im_id}:{class_name}:{box_str}:{prompt_hash}"
+
+    if pred_cache:
+        cached_res = pred_cache.get(cache_key)
+        if cached_res is not None:
+            logger.info("LLM validation for {} (cached): is_valid={}, reason={}", class_name, cached_res.get("is_valid"), cached_res.get("reason"))
+            return bool(cached_res.get("is_valid"))
 
     # Get class overrides
     class_override = llm_cfg.get(class_name, {})
@@ -546,8 +593,11 @@ def validate_detection_with_llm(
             images=[crop_bytes],
             output_object_type=VerificationResult,
         )
-        logger.info("LLM validation for {}: is_valid={}, reason={}", class_name, parsed.is_valid, parsed.reason)
-        return parsed.is_valid
+        is_valid = bool(parsed.is_valid)
+        if pred_cache:
+            pred_cache.set(cache_key, {"is_valid": is_valid, "reason": parsed.reason})
+        logger.info("LLM validation for {}: is_valid={}, reason={}", class_name, is_valid, parsed.reason)
+        return is_valid
     except Exception as e:
         logger.error("LLM validation call failed for class {} — dropping detection to fail safe: {}", class_name, e)
         return False
@@ -622,6 +672,10 @@ def main(
         cache_dir = output_dir / "cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
 
+    pred_cache_file = cache_dir / "predictions_cache.json"
+    use_pred_cache = bool(dataset_cfg.get("use_prediction_cache", True))
+    pred_cache = PredictionCache(pred_cache_file, enabled=use_pred_cache)
+
     # 2. Setup LLM if validation configured
     llm_cfg = cfg.get("llm_validation", cfg.get("llm validation"))
     llm_executor = None
@@ -695,6 +749,7 @@ def main(
 
     for i, (idx, row) in enumerate(df.iterrows(), 1):
         im_url = row["im_url"]
+        im_id = row.get("im_id", _stable_image_id(im_url))
         logger.info("Processing image [{}/{}]: {}", i, len(df), im_url)
 
         # Download/read image
@@ -717,21 +772,30 @@ def main(
         # Run configured detectors
         for model_cfg in detection_models:
             model_type = model_cfg.get("model_type")
-            if model_type == "fashion_model":
-                try:
-                    fashion_dets = run_fashion_model(image, model_cfg)
-                    row_dets.extend(fashion_dets)
-                except Exception as e:
-                    logger.error("Fashion model execution failed: {}", e)
-            elif model_type == "locate_anything":
-                if local_path is None:
-                    logger.warning("local_path is None for {}; skipping locate_anything.", im_url)
-                else:
+            cfg_hash = hashlib.md5(json.dumps(model_cfg, sort_keys=True, default=str).encode()).hexdigest()[:8]
+            det_cache_key = f"det:{im_id}:{model_type}:{cfg_hash}"
+
+            cached_dets = pred_cache.get(det_cache_key)
+            if cached_dets is not None:
+                logger.debug("Reusing cached {} detections for image [{}]", model_type, im_url)
+                row_dets.extend(cached_dets)
+            else:
+                m_dets = []
+                if model_type == "fashion_model":
                     try:
-                        locate_dets = run_locate_anything(str(local_path), model_cfg)
-                        row_dets.extend(locate_dets)
+                        m_dets = run_fashion_model(image, model_cfg)
                     except Exception as e:
-                        logger.error("Locate anything execution failed: {}", e)
+                        logger.error("Fashion model execution failed: {}", e)
+                elif model_type == "locate_anything":
+                    if local_path is None:
+                        logger.warning("local_path is None for {}; skipping locate_anything.", im_url)
+                    else:
+                        try:
+                            m_dets = run_locate_anything(str(local_path), model_cfg)
+                        except Exception as e:
+                            logger.error("Locate anything execution failed: {}", e)
+                pred_cache.set(det_cache_key, m_dets)
+                row_dets.extend(m_dets)
 
         # 4. Apply deduplication policy
         if dedup_cfg and row_dets:
@@ -795,13 +859,17 @@ def main(
                 should_validate = (not llm_classes) or (d["name"].lower() in llm_classes)
                 if should_validate:
                     is_valid = validate_detection_with_llm(
-                        image, d, llm_cfg, llm_executor, system_prompt, user_prompt_tmpl
+                        image, d, llm_cfg, llm_executor, system_prompt, user_prompt_tmpl,
+                        im_id=im_id, pred_cache=pred_cache
                     )
                     if is_valid:
                         validated_dets.append(d)
                 else:
                     validated_dets.append(d)
             row_dets = validated_dets
+
+        # Save prediction cache after processing image
+        pred_cache.save()
 
         # Form final row values
         # Use None (→ NaN in the CSV) rather than an empty string for missing
