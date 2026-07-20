@@ -1106,6 +1106,7 @@ def generate_visualization_cmd(
     if not image_col:
         raise ValueError(f"Could not find image URL column in dataset.")
 
+    keep_bbs = bool(dataset_cfg.get("keep_bounding_boxes", False))
     viz_items = []
     for _, row in df.iterrows():
         im_url = str(row[image_col]).strip()
@@ -1113,8 +1114,11 @@ def generate_visualization_cmd(
             continue
         im_id = row.get("im_id", _stable_image_id(im_url))
 
-        # Check predictions cache for detector keys
         dets = []
+        if keep_bbs:
+            dets.extend(parse_existing_boxes_and_concepts(row))
+
+        # Check predictions cache for detector keys
         for key, val in pred_cache.cache.items():
             if key.startswith(f"det:{im_id}:") and isinstance(val, list):
                 dets.extend(val)
