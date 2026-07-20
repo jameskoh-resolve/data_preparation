@@ -106,6 +106,7 @@ The auto-annotate CLI has two layers:
 - `prep-azure`: prepares/uploads images and writes Azure SAS CSV.
 - `prefetch`: pre-downloads images into local cache.
 - `main`: runs the annotation pipeline.
+- `visualize`: generates/refreshes the interactive HTML visualization gallery.
 
 2. **Mode layer** (only used with `main`)
 - `--mode full`: detection + dedup + LLM validation.
@@ -117,7 +118,22 @@ PYTHONPATH=. .venv/bin/python curation/auto_annotate.py prep-azure configs/auto_
 PYTHONPATH=. .venv/bin/python curation/auto_annotate.py prefetch configs/auto_annotate_westside_part_2.yaml
 PYTHONPATH=. .venv/bin/python curation/auto_annotate.py main configs/auto_annotate_westside_part_2.yaml --mode detection_only
 PYTHONPATH=. .venv/bin/python curation/auto_annotate.py main configs/auto_annotate_westside_part_2.yaml --mode full
+PYTHONPATH=. .venv/bin/python curation/auto_annotate.py visualize configs/auto_annotate_westside_part_2.yaml
 ```
+
+---
+
+### Interactive HTML Visualization Gallery
+
+Every `main` run automatically generates a self-contained HTML gallery in your output directory (e.g. `output/westside/visualization.html` & `output/westside/<dataset>_visualization.html`).
+
+- **Toggle `LLM Filtered`**: Easily toggle between showing **final LLM-validated boxes** and **raw model candidate boxes** (with LLM-rejected boxes highlighted via red dashed borders).
+- **Search & Filter**: Filter by class concept, LLM status (validated vs rejected), image ID, or prompt reason.
+- **Detail Modal**: Click any image card to open a full-screen inspector with class tags, box coordinates, and LLM explanation reasons.
+- **Stand-alone Command**: You can re-generate the gallery at any time without running inference using:
+  ```bash
+  PYTHONPATH=. .venv/bin/python curation/auto_annotate.py visualize <path/to/config.yaml>
+  ```
 
 ---
 

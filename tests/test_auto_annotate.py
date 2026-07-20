@@ -197,7 +197,7 @@ def test_validate_detection_with_llm(mock_imencode):
     is_valid = validate_detection_with_llm(
         img, det, llm_cfg, executor, system_prompt, user_prompt_tmpl
     )
-    assert is_valid is True
+    assert bool(is_valid) is True
     # Verify overrides: earring should use padding 0.2
     # The cropped region for box [10, 10, 20, 20] with padding 0.2 has size 10 + 2*2 = 14
     # Ensure executor predict was invoked
@@ -229,7 +229,7 @@ def test_validate_detection_with_llm_custom_task(mock_imencode):
     is_valid = validate_detection_with_llm(
         img, det, llm_cfg, executor, system_prompt, user_prompt_tmpl
     )
-    assert is_valid is True
+    assert bool(is_valid) is True
     call_args = executor.predict.call_args[0][0]
     human_msg = call_args[1].content
     assert "Verify if there is an obvious headband on the person." in human_msg
@@ -263,7 +263,7 @@ def test_validate_detection_with_llm_upscales_tiny_crop(mock_imencode):
         img, det, llm_cfg, executor, system_prompt, user_prompt_tmpl
     )
 
-    assert is_valid is True
+    assert bool(is_valid) is True
 
     # Ensure the encoded image is upscaled from tiny input before sending to the LLM.
     encoded_crop = mock_imencode.call_args[0][1]
@@ -432,6 +432,47 @@ def test_resolve_dataset_csv_fallback(tmp_path, monkeypatch):
     df, filename = resolve_dataset_csv(dataset_cfg, prefer_azure=True)
     assert filename == "sample.csv"
     assert "azure.blob.com" in df["im_url"].iloc[0]
+
+
+def test_generate_html_visualization(tmp_path):
+    from utils.html_visualization import generate_html_visualization
+
+    viz_items = [
+        {
+            "im_id": "test_id_123",
+            "im_url": "http://example.com/image.jpg",
+            "detections": [
+                {
+                    "name": "top",
+                    "box": [10, 10, 50, 50],
+                    "score": 0.95,
+                    "source": "locate_anything",
+                    "llm_validated": True,
+                    "is_valid": True,
+                    "reason": "Top is visible"
+                },
+                {
+                    "name": "earring",
+                    "box": [5, 5, 12, 12],
+                    "score": 0.8,
+                    "source": "locate_anything",
+                    "llm_validated": True,
+                    "is_valid": False,
+                    "reason": "Crop shows background spot"
+                }
+            ]
+        }
+    ]
+
+    out_file = tmp_path / "visualization.html"
+    res_path = generate_html_visualization(viz_items, out_file, title="Test Visualization Gallery")
+
+    assert res_path.exists()
+    content = res_path.read_text(encoding="utf-8")
+    assert "Test Visualization Gallery" in content
+    assert "test_id_123" in content
+    assert "LLM Filtered" in content
+    assert "useLlmValidation" in content
 
 
 

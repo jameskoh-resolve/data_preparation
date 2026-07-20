@@ -52,6 +52,9 @@ class VerificationResult(BaseModel):
     is_valid: bool = Field(..., description="Whether the crop contains the specified class of accessory or item.")
     reason: str = Field(..., description="Short explanation of the validation result.")
 
+    def __bool__(self) -> bool:
+        return self.is_valid
+
 
 class DetectorRegistry:
     _detector_instances = {}
@@ -104,6 +107,10 @@ class PredictionCache:
             except Exception as e:
                 logger.warning("Failed to load prediction cache from {}: {}", self.cache_file, e)
 
+    @property
+    def cache(self) -> dict[str, Any]:
+        return self._data
+
     def get(self, key: str) -> Any | None:
         if not self.enabled:
             return None
@@ -131,7 +138,9 @@ def safe_format(template: str, **kwargs) -> str:
     return template
 
 
-def normalize_execution_mode(mode: str) -> str:
+def normalize_execution_mode(mode: Any) -> str:
+    if not isinstance(mode, str):
+        mode = getattr(mode, "default", "full")
     normalized = str(mode or "").strip().lower()
     allowed = {"full", "detection_only"}
     if normalized not in allowed:
@@ -663,8 +672,10 @@ def validate_detection_with_llm(
     if pred_cache:
         cached_res = pred_cache.get(cache_key)
         if cached_res is not None:
-            logger.info("LLM validation for {} (cached): is_valid={}, reason={}", class_name, cached_res.get("is_valid"), cached_res.get("reason"))
-            return bool(cached_res.get("is_valid"))
+            is_val = bool(cached_res.get("is_valid"))
+            reason_str = str(cached_res.get("reason", "") or "")
+            logger.info("LLM validation for {} (cached): is_valid={}, reason={}", class_name, is_val, reason_str)
+            return VerificationResult(is_valid=is_val, reason=reason_str)
 
     from langchain.schema import SystemMessage, HumanMessage
     messages = [
@@ -679,13 +690,14 @@ def validate_detection_with_llm(
             output_object_type=VerificationResult,
         )
         is_valid = bool(parsed.is_valid)
+        reason_str = str(getattr(parsed, "reason", "") or "")
         if pred_cache:
-            pred_cache.set(cache_key, {"is_valid": is_valid, "reason": parsed.reason})
-        logger.info("LLM validation for {}: is_valid={}, reason={}", class_name, is_valid, parsed.reason)
-        return is_valid
+            pred_cache.set(cache_key, {"is_valid": is_valid, "reason": reason_str})
+        logger.info("LLM validation for {}: is_valid={}, reason={}", class_name, is_valid, reason_str)
+        return VerificationResult(is_valid=is_valid, reason=reason_str)
     except Exception as e:
         logger.error("LLM validation call failed for class {} — dropping detection to fail safe: {}", class_name, e)
-        return False
+        return VerificationResult(is_valid=False, reason=f"LLM call failed: {e}")
 
 
 def resolve_dataset_csv(dataset_cfg: dict, prefer_azure: bool = True) -> tuple[pd.DataFrame, str]:
@@ -866,6 +878,7 @@ def main(
         dedup_cfg = OmegaConf.to_container(dedup_cfg, resolve=True)
 
     annotated_rows = []
+    viz_items = []
     logger.info("Processing {} images...", len(df))
 
     for i, (idx, row) in enumerate(df.iterrows(), 1):
@@ -883,6 +896,11 @@ def main(
             row_updated["concepts"] = None
             row_updated["boxes"] = None
             annotated_rows.append(row_updated)
+            viz_items.append({
+                "im_id": im_id,
+                "im_url": im_url,
+                "detections": [],
+            })
             continue
 
         # Start with existing boxes if configured
@@ -945,6 +963,7 @@ def main(
             row_dets = deduped_dets
 
         # 5. Apply LLM validation (with candidate box count safety caps)
+        viz_detections = []
         if llm_executor and row_dets:
             max_per_img = int(llm_cfg.get("max_boxes_per_image", 20))
             max_per_cls = int(llm_cfg.get("max_boxes_per_class", 6))
@@ -978,16 +997,39 @@ def main(
             for d in row_dets:
                 # Check if we should validate this class
                 should_validate = (not llm_classes) or (d["name"].lower() in llm_classes)
+                det_viz = dict(d)
                 if should_validate:
-                    is_valid = validate_detection_with_llm(
+                    res = validate_detection_with_llm(
                         image, d, llm_cfg, llm_executor, system_prompt, user_prompt_tmpl,
                         im_id=im_id, pred_cache=pred_cache
                     )
-                    if is_valid:
+                    is_val = bool(getattr(res, "is_valid", res))
+                    reason_str = str(getattr(res, "reason", "") or "")
+                    det_viz["llm_validated"] = True
+                    det_viz["is_valid"] = is_val
+                    det_viz["reason"] = reason_str
+                    if is_val:
                         validated_dets.append(d)
                 else:
+                    det_viz["llm_validated"] = False
+                    det_viz["is_valid"] = True
+                    det_viz["reason"] = ""
                     validated_dets.append(d)
+                viz_detections.append(det_viz)
             row_dets = validated_dets
+        else:
+            for d in row_dets:
+                det_viz = dict(d)
+                det_viz["llm_validated"] = False
+                det_viz["is_valid"] = True
+                det_viz["reason"] = ""
+                viz_detections.append(det_viz)
+
+        viz_items.append({
+            "im_id": im_id,
+            "im_url": im_url,
+            "detections": viz_detections,
+        })
 
         # Save prediction cache after processing image
         pred_cache.save()
@@ -1026,6 +1068,96 @@ def main(
         len(out_df),
         output_path,
     )
+
+    # 7. Generate HTML visualization
+    try:
+        from utils.html_visualization import generate_html_visualization
+        html_out_1 = output_dir / f"{output_stem}_visualization.html"
+        html_out_2 = output_dir / "visualization.html"
+        generate_html_visualization(viz_items, html_out_1, title=f"Auto-Annotate Visualization — {output_stem}")
+        generate_html_visualization(viz_items, html_out_2, title=f"Auto-Annotate Visualization — {output_stem}")
+        logger.info("Generated HTML visualization gallery: {}", html_out_1)
+    except Exception as e:
+        logger.warning("Failed to generate HTML visualization: {}", e)
+
+
+@app.command(name="visualize")
+def generate_visualization_cmd(
+    config_file: str = typer.Argument(..., help="Path to auto-annotate config YAML"),
+):
+    """Generate or refresh HTML visualization gallery from predictions cache & dataset."""
+    from utils.html_visualization import generate_html_visualization
+
+    cfg = OmegaConf.load(str(config_file))
+    dataset_cfg = cfg.get("dataset", {})
+    df, original_filename = resolve_dataset_csv(dataset_cfg, prefer_azure=True)
+
+    output_dir = Path(dataset_cfg.get("output_dir", REPO_ROOT / "curated_datasets/curation"))
+    custom_cache = dataset_cfg.get("cache_dir")
+    cache_dir = Path(custom_cache) if custom_cache else output_dir / "cache"
+    pred_cache_file = cache_dir / "predictions_cache.json"
+    pred_cache = PredictionCache(pred_cache_file)
+
+    image_col = None
+    for col in ("im_url", "image_url", "url", "image", "original_url"):
+        if col in df.columns:
+            image_col = col
+            break
+
+    if not image_col:
+        raise ValueError(f"Could not find image URL column in dataset.")
+
+    viz_items = []
+    for _, row in df.iterrows():
+        im_url = str(row[image_col]).strip()
+        if not im_url:
+            continue
+        im_id = row.get("im_id", _stable_image_id(im_url))
+
+        # Check predictions cache for detector keys
+        dets = []
+        for key, val in pred_cache.cache.items():
+            if key.startswith(f"det:{im_id}:") and isinstance(val, list):
+                dets.extend(val)
+
+        # Check predictions cache for LLM validation entries
+        viz_dets = []
+        for d in dets:
+            d_entry = dict(d)
+            box = d.get("box", [0, 0, 0, 0])
+            box_str = f"[{int(round(box[0]))},{int(round(box[1]))},{int(round(box[2]))},{int(round(box[3]))}]"
+            cls_name = d.get("name", "")
+
+            # Look up any LLM cache key for this box
+            matched_llm = None
+            for k, v in pred_cache.cache.items():
+                if k.startswith(f"llm:{im_id}:{cls_name}:{box_str}:") and isinstance(v, dict):
+                    matched_llm = v
+                    break
+
+            if matched_llm is not None:
+                d_entry["llm_validated"] = True
+                d_entry["is_valid"] = bool(matched_llm.get("is_valid"))
+                d_entry["reason"] = str(matched_llm.get("reason", "") or "")
+            else:
+                d_entry["llm_validated"] = False
+                d_entry["is_valid"] = True
+                d_entry["reason"] = ""
+            viz_dets.append(d_entry)
+
+        viz_items.append({
+            "im_id": im_id,
+            "im_url": im_url,
+            "detections": viz_dets,
+        })
+
+    output_stem = Path(original_filename).stem
+    html_out = output_dir / f"{output_stem}_visualization.html"
+    generic_out = output_dir / "visualization.html"
+
+    generate_html_visualization(viz_items, html_out, title=f"Auto-Annotate Visualization — {output_stem}")
+    generate_html_visualization(viz_items, generic_out, title=f"Auto-Annotate Visualization — {output_stem}")
+    logger.info("Saved visualization HTML gallery ({} images) to {}", len(viz_items), html_out)
 
 
 @app.command(name="prefetch")
