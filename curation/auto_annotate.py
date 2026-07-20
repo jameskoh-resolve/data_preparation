@@ -1072,11 +1072,9 @@ def main(
     # 7. Generate HTML visualization
     try:
         from utils.html_visualization import generate_html_visualization
-        html_out_1 = output_dir / f"{output_stem}_visualization.html"
-        html_out_2 = output_dir / "visualization.html"
-        generate_html_visualization(viz_items, html_out_1, title=f"Auto-Annotate Visualization — {output_stem}")
-        generate_html_visualization(viz_items, html_out_2, title=f"Auto-Annotate Visualization — {output_stem}")
-        logger.info("Generated HTML visualization gallery: {}", html_out_1)
+        html_out = output_dir / f"{output_stem}_visualization.html"
+        generate_html_visualization(viz_items, html_out, title=f"Auto-Annotate Visualization — {output_stem}")
+        logger.info("Generated HTML visualization gallery: {}", html_out)
     except Exception as e:
         logger.warning("Failed to generate HTML visualization: {}", e)
 
@@ -1153,10 +1151,7 @@ def generate_visualization_cmd(
 
     output_stem = Path(original_filename).stem
     html_out = output_dir / f"{output_stem}_visualization.html"
-    generic_out = output_dir / "visualization.html"
-
     generate_html_visualization(viz_items, html_out, title=f"Auto-Annotate Visualization — {output_stem}")
-    generate_html_visualization(viz_items, generic_out, title=f"Auto-Annotate Visualization — {output_stem}")
     logger.info("Saved visualization HTML gallery ({} images) to {}", len(viz_items), html_out)
 
 
