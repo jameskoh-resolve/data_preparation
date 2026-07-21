@@ -31,14 +31,14 @@ detection_models:
     classes: [earring, necklace, bracelet, watch, ring, shoe]
     # class_aliases: query the API with subcategory terms and remap to a canonical output class.
     # The canonical name (e.g. hair_accessories) must also be in 'classes' above.
-    # class_aliases:
-    #   hair_accessories:
-    #     - hijab
-    #     - headband
-    #     - headscarf
-    #     - bandana
-    #     - large hairband
-    #     - hair accessories   # space form — in case the API returns this label directly
+    class_aliases:
+      necklace:
+        - necklace worn around neck
+      watch:
+        - wristwatch with visible watch face
+      ring:
+        - ring worn on finger
+
 dedup_policy:
   general:
     IOU: 0.7
