@@ -112,13 +112,9 @@ class PredictionCache:
         return self._data
 
     def get(self, key: str) -> Any | None:
-        if not self.enabled:
-            return None
         return self._data.get(key)
 
     def set(self, key: str, value: Any) -> None:
-        if not self.enabled:
-            return
         self._data[key] = value
 
     def save(self) -> None:
