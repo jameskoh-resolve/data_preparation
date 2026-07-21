@@ -22,12 +22,13 @@ dataset:
 detection_models:
   - model_type: locate_anything
     api_endpoint: http://localhost:8080/detect_classes
-    decoding_mode: hybrid
+    decoding_mode: slow
     use_batch_api: true
     batch_size: 8
     max_classes_per_prompt: 15
     class_groups:
-      - [earring, necklace, bracelet, watch, ring, shoe]
+      - [earring, necklace, ring]
+      - [bracelet, watch, shoe]
     classes: [earring, necklace, bracelet, watch, ring, shoe]
     # class_aliases: query the API with subcategory terms and remap to a canonical output class.
     # The canonical name (e.g. hair_accessories) must also be in 'classes' above.
@@ -62,71 +63,71 @@ llm_validation:
 
   # ── Clothing ───────────────────────────────────────────────────────────────
 
-  top:
-    padding: 0.0
-    task: "Verify if the crop shows a top-half garment (shirt, blouse, t-shirt, tank top, polo) worn on a person's upper body as the main visible top layer. The crop (without padding) must contain a substantial portion (at least 50%) of the top garment. Reject tight crops or tiny fragments showing less than 50% of the item. Do NOT classify an innertop worn under outerwear as a standalone top."
+  # top:
+  #   padding: 0.0
+  #   task: "Verify if the crop shows a top-half garment (shirt, blouse, t-shirt, tank top, polo) worn on a person's upper body as the main visible top layer. The crop (without padding) must contain a substantial portion (at least 50%) of the top garment. Reject tight crops or tiny fragments showing less than 50% of the item. Do NOT classify an innertop worn under outerwear as a standalone top."
 
-  bottom:
-    padding: 0.0
-    task: "Verify if the crop shows a bottom-half garment (trousers, jeans, shorts, leggings, culottes) worn on a person's lower body. The crop (without padding) must contain a substantial portion (at least 50%) of the bottom garment. Reject tight crops or tiny fragments showing less than 50% of the item."
+  # bottom:
+  #   padding: 0.0
+  #   task: "Verify if the crop shows a bottom-half garment (trousers, jeans, shorts, leggings, culottes) worn on a person's lower body. The crop (without padding) must contain a substantial portion (at least 50%) of the bottom garment. Reject tight crops or tiny fragments showing less than 50% of the item."
 
-  dress:
-    padding: 0.0
-    task: "Verify if the crop shows a dress — a one-piece garment covering both upper and lower body. The crop (without padding) must contain a substantial portion (at least 50%) of the dress. Reject tight crops or fragments showing less than 50% of the dress. Do NOT classify a separate top+bottom combination as a dress."
+  # dress:
+  #   padding: 0.0
+  #   task: "Verify if the crop shows a dress — a one-piece garment covering both upper and lower body. The crop (without padding) must contain a substantial portion (at least 50%) of the dress. Reject tight crops or fragments showing less than 50% of the dress. Do NOT classify a separate top+bottom combination as a dress."
 
-  skirt:
-    padding: 0.0
-    task: "Verify if the crop shows a skirt as a separate lower-body garment (visually distinct from a dress). The crop (without padding) must contain a substantial portion (at least 50%) of the skirt. Reject tight crops or fragments showing less than 50% of the item."
+  # skirt:
+  #   padding: 0.0
+  #   task: "Verify if the crop shows a skirt as a separate lower-body garment (visually distinct from a dress). The crop (without padding) must contain a substantial portion (at least 50%) of the skirt. Reject tight crops or fragments showing less than 50% of the item."
 
-  outerwear:
-    padding: 0.0
-    task: "Verify if the crop shows outerwear (jacket, coat, blazer, cardigan, bomber jacket) worn as the outermost layer over other clothing. The crop (without padding) must contain a substantial portion (at least 50%) of the outerwear garment. Reject tight crops or fragments showing less than 50% of the item."
+  # outerwear:
+  #   padding: 0.0
+  #   task: "Verify if the crop shows outerwear (jacket, coat, blazer, cardigan, bomber jacket) worn as the outermost layer over other clothing. The crop (without padding) must contain a substantial portion (at least 50%) of the outerwear garment. Reject tight crops or fragments showing less than 50% of the item."
 
-  innertop:
-    padding: 0.05
-    task: "Verify if the item is an innertop — defined as ANY top/shirt/t-shirt/vest worn as an inner layer underneath visible outerwear (such as a jacket, coat, blazer, cardigan, or unbuttoned overshirt). The crop must show a substantial portion (at least 50%) of the innertop garment along with surrounding visible outerwear. Do NOT classify standalone tops without outer layers as innertop."
+  # innertop:
+  #   padding: 0.05
+  #   task: "Verify if the item is an innertop — defined as ANY top/shirt/t-shirt/vest worn as an inner layer underneath visible outerwear (such as a jacket, coat, blazer, cardigan, or unbuttoned overshirt). The crop must show a substantial portion (at least 50%) of the innertop garment along with surrounding visible outerwear. Do NOT classify standalone tops without outer layers as innertop."
 
-  ethnic_wear:
-    padding: 0.0
-    task: "Verify if the garment shown is ethnic or traditional wear (e.g. saree, kurta, lehenga, salwar kameez, sherwani, dhoti). The crop (without padding) must contain a substantial portion (at least 50%) of the ethnic garment. Do NOT classify Western-style clothing as ethnic_wear."
+  # ethnic_wear:
+  #   padding: 0.0
+  #   task: "Verify if the garment shown is ethnic or traditional wear (e.g. saree, kurta, lehenga, salwar kameez, sherwani, dhoti). The crop (without padding) must contain a substantial portion (at least 50%) of the ethnic garment. Do NOT classify Western-style clothing as ethnic_wear."
 
   # ── Footwear & Accessories ─────────────────────────────────────────────────
 
-  shoe:
-    padding: 0.05
-    task: "Verify if there is a clearly visible shoe, sneaker, boot, sandal, or other footwear on a person's foot/feet."
+  # shoe:
+  #   padding: 0.05
+  #   task: "Verify if there is a clearly visible shoe, sneaker, boot, sandal, or other footwear on a person's foot/feet."
 
-  bag:
-    padding: 0.05
-    task: "Verify if there is a clearly visible bag, backpack, purse, clutch, or handbag carried by or near a person."
+  # bag:
+  #   padding: 0.05
+  #   task: "Verify if there is a clearly visible bag, backpack, purse, clutch, or handbag carried by or near a person."
 
-  belt:
-    padding: 0.05
-    task: "Verify if there is a clothing belt clearly visible around a person's waist or hips, typically showing a leather strap or buckle. Do NOT confuse seams, fabric folds, bag straps, or plain waistbands as a belt."
+  # belt:
+  #   padding: 0.05
+  #   task: "Verify if there is a clothing belt clearly visible around a person's waist or hips, typically showing a leather strap or buckle. Do NOT confuse seams, fabric folds, bag straps, or plain waistbands as a belt."
 
-  tie:
-    padding: 0.05
-    task: "Verify if the person is wearing a necktie or bowtie around their neck."
+  # tie:
+  #   padding: 0.05
+  #   task: "Verify if the person is wearing a necktie or bowtie around their neck."
 
-  gloves:
-    padding: 0.05
-    task: "Verify if the person is wearing gloves or mittens clearly covering their hands or fingers."
+  # gloves:
+  #   padding: 0.05
+  #   task: "Verify if the person is wearing gloves or mittens clearly covering their hands or fingers."
 
-  scarf:
-    padding: 0.1
-    task: "Verify if the person is wearing a scarf draped around their neck, shoulders, or head as a textile accessory. Do NOT confuse a scarf with a collar, lapel, or regular neckline of a top."
+  # scarf:
+  #   padding: 0.1
+  #   task: "Verify if the person is wearing a scarf draped around their neck, shoulders, or head as a textile accessory. Do NOT confuse a scarf with a collar, lapel, or regular neckline of a top."
 
-  eyewear:
-    padding: 0.1
-    task: "Verify if the person is wearing glasses, sunglasses, or spectacles on their face. The frames or lenses must be clearly visible."
+  # eyewear:
+  #   padding: 0.1
+  #   task: "Verify if the person is wearing glasses, sunglasses, or spectacles on their face. The frames or lenses must be clearly visible."
 
-  headwear:
-    padding: 0.1
-    task: "Verify if the person is wearing a hat, cap, beanie, or balaclava on their head. Do NOT classify headbands, hair clips, or hijabs as headwear."
+  # headwear:
+  #   padding: 0.1
+  #   task: "Verify if the person is wearing a hat, cap, beanie, or balaclava on their head. Do NOT classify headbands, hair clips, or hijabs as headwear."
 
-  hair_accessories:
-    padding: 0.8
-    task: "Verify if there is an obvious worn hair accessory (e.g. hijab, headband, hairclip, bandana, headscarf) on the person's head/hair. The crop includes surrounding head context — verify that the hair accessory is clearly worn on the head/hair. Do NOT count plain hair ties, hair strands, or background items."
+  # hair_accessories:
+  #   padding: 0.8
+  #   task: "Verify if there is an obvious worn hair accessory (e.g. hijab, headband, hairclip, bandana, headscarf) on the person's head/hair. The crop includes surrounding head context — verify that the hair accessory is clearly worn on the head/hair. Do NOT count plain hair ties, hair strands, or background items."
 
   # ── Jewelry ────────────────────────────────────────────────────────────────
 
@@ -150,10 +151,10 @@ llm_validation:
     padding: 1.2
     task: "Verify if there is a ring clearly visible worn on a human finger. The crop includes surrounding hand context — confirm that the ring is attached to a human finger on a hand. Do NOT mistake nail polish, skin texture, background objects, or loose standalone objects as a worn ring."
 
-  head_jewelry:
-    padding: 0.15
-    task: "Verify if the person is wearing jewelry on their head or forehead (e.g. maang tikka, matha patti, forehead chain, head chain). Do NOT classify headbands, hair clips, or regular headwear as head_jewelry."
+  # head_jewelry:
+  #   padding: 0.15
+  #   task: "Verify if the person is wearing jewelry on their head or forehead (e.g. maang tikka, matha patti, forehead chain, head chain). Do NOT classify headbands, hair clips, or regular headwear as head_jewelry."
 
-  anklet:
-    padding: 0.15
-    task: "Verify if there is a clearly visible anklet or ankle bracelet worn around a person's ankle. Do NOT mistake shoe straps, sock edges, or leg outlines as an anklet."
+  # anklet:
+  #   padding: 0.15
+  #   task: "Verify if there is a clearly visible anklet or ankle bracelet worn around a person's ankle. Do NOT mistake shoe straps, sock edges, or leg outlines as an anklet."
