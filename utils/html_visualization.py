@@ -312,6 +312,26 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             flex-direction: column;
             gap: 12px;
         }
+        .sidebar-header-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 4px;
+        }
+        .quick-toggle-btn {
+            background: #334155;
+            border: 1px solid #475569;
+            color: #cbd5e1;
+            font-size: 10px;
+            padding: 2px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+        }
+        .quick-toggle-btn:hover {
+            background: #475569;
+            color: #ffffff;
+        }
         .modal-sidebar h4 {
             font-size: 12px;
             color: #94a3b8;
@@ -324,7 +344,44 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             border: 1px solid #334155;
             padding: 12px;
             font-size: 11px;
-            transition: border-color 0.15s;
+            transition: all 0.15s ease;
+            cursor: pointer;
+            user-select: none;
+            position: relative;
+        }
+        .box-detail-card:hover {
+            border-color: #3b82f6;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+        .box-detail-card.box-hidden {
+            opacity: 0.45;
+            background: #090d16;
+            border-color: #334155 !important;
+            filter: grayscale(0.5);
+        }
+        .box-detail-card.box-hidden .box-title {
+            text-decoration: line-through;
+            color: #64748b;
+        }
+        .eye-toggle-btn {
+            font-size: 13px;
+            color: #94a3b8;
+            transition: color 0.15s, transform 0.15s;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .box-detail-card:hover .eye-toggle-btn {
+            color: #60a5fa;
+            transform: scale(1.15);
+        }
+        .box-detail-card.box-hidden .eye-toggle-btn {
+            color: #475569;
+        }
+        .status-badge.hidden-badge { background: #334155; color: #94a3b8; }
+        svg rect.highlighted {
+            stroke-width: 4px !important;
+            filter: drop-shadow(0 0 6px rgba(59, 130, 246, 0.8));
         }
         .box-detail-card.rejected {
             border-color: #ef4444;
@@ -446,7 +503,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 </div>
             </div>
             <div class="modal-sidebar">
-                <h4>Bounding Box Details</h4>
+                <div class="sidebar-header-row">
+                    <h4>Bounding Box Details</h4>
+                    <div style="display:flex;gap:4px;">
+                        <button class="quick-toggle-btn" onclick="toggleAllBoxes(true)">Show All</button>
+                        <button class="quick-toggle-btn" onclick="toggleAllBoxes(false)">Hide All</button>
+                    </div>
+                </div>
+                <div style="font-size:10px;color:#64748b;margin-bottom:4px;">Click any card below to show/hide its box</div>
                 <div id="modalBoxList"></div>
             </div>
         </div>
@@ -495,6 +559,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     let currentPage = 1;
     const PAGE_SIZE = 50;
     let activeModalItemIndex = -1;
+    let hiddenBoxIndices = new Set();
 
     function init() {
         populateFilters();
@@ -684,7 +749,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
     }
 
-    function drawSvgBoxes(svgEl, imgEl, item, useLlmFilter, showBoxes, showLabels) {
+    function drawSvgBoxes(svgEl, imgEl, item, useLlmFilter, showBoxes, showLabels, hiddenIndices = null) {
         svgEl.innerHTML = '';
         if (!showBoxes) return;
 
@@ -694,7 +759,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         const dets = getDetectionsForItem(item, useLlmFilter);
 
-        dets.forEach(det => {
+        dets.forEach((det, idx) => {
+            if (hiddenIndices && hiddenIndices.has(idx)) return;
+
             const box = det.box;
             if (!box || box.length < 4) return;
 
@@ -712,6 +779,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             rect.setAttribute('fill', isRejected ? 'rgba(239, 68, 68, 0.08)' : `${color}22`);
             rect.setAttribute('stroke', isRejected ? '#ef4444' : color);
             rect.setAttribute('stroke-width', Math.max(2, Math.round(nw / 400)));
+            rect.setAttribute('data-box-idx', idx);
             if (isRejected) {
                 rect.setAttribute('stroke-dasharray', '6,4');
             }
@@ -719,6 +787,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
             if (showLabels) {
                 const textGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                textGroup.setAttribute('data-box-idx', idx);
                 const fontSize = Math.max(12, Math.round(nw / 42));
 
                 const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
@@ -770,6 +839,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
     function openModal(globalIdx) {
         activeModalItemIndex = globalIdx;
+        hiddenBoxIndices.clear();
         const item = filteredData[globalIdx];
         if (!item) return;
 
@@ -806,7 +876,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         const showLabels = document.getElementById('modalShowLabels').checked;
         const useLlmFilter = document.getElementById('modalUseLlmValidation').checked;
 
-        drawSvgBoxes(modalSvg, modalImg, item, useLlmFilter, showBoxes, showLabels);
+        drawSvgBoxes(modalSvg, modalImg, item, useLlmFilter, showBoxes, showLabels, hiddenBoxIndices);
         renderModalSidebar(item);
     }
 
@@ -824,20 +894,41 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             return;
         }
 
+        const eyeVisibleSvg = `<svg class="eye-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
+        const eyeHiddenSvg = `<svg class="eye-icon hidden-eye" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`;
+
         dets.forEach((d, i) => {
             const card = document.createElement('div');
             const isRejected = d.is_valid === false;
             const isValidated = d.is_valid === true;
-            card.className = `box-detail-card ${isRejected ? 'rejected' : (isValidated ? 'validated' : '')}`;
+            const isHidden = hiddenBoxIndices.has(i);
+
+            card.className = `box-detail-card ${isRejected ? 'rejected' : (isValidated ? 'validated' : '')} ${isHidden ? 'box-hidden' : ''}`;
+            card.onclick = () => toggleBoxVisibility(i);
+
+            card.onmouseenter = () => {
+                const modalSvg = document.getElementById('modalSvg');
+                if (modalSvg) {
+                    modalSvg.querySelectorAll(`[data-box-idx="${i}"]`).forEach(el => el.classList.add('highlighted'));
+                }
+            };
+            card.onmouseleave = () => {
+                const modalSvg = document.getElementById('modalSvg');
+                if (modalSvg) {
+                    modalSvg.querySelectorAll(`[data-box-idx="${i}"]`).forEach(el => el.classList.remove('highlighted'));
+                }
+            };
 
             const color = getColor(d.name);
             let statusBadge = '<span class="status-badge unvalidated">Detection Only</span>';
             if (isValidated) statusBadge = '<span class="status-badge valid">✓ Validated</span>';
             if (isRejected) statusBadge = '<span class="status-badge invalid">✕ Rejected</span>';
+            if (isHidden) statusBadge = '<span class="status-badge hidden-badge">Hidden</span>';
 
             card.innerHTML = `
                 <div class="box-title">
                     <span style="display:flex;align-items:center;gap:6px;">
+                        <span class="eye-toggle-btn" title="${isHidden ? 'Click to show bounding box' : 'Click to hide bounding box'}">${isHidden ? eyeHiddenSvg : eyeVisibleSvg}</span>
                         <span style="width:10px;height:10px;border-radius:2px;background:${color};display:inline-block;"></span>
                         ${d.name}
                     </span>
@@ -849,6 +940,32 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             `;
             sidebar.appendChild(card);
         });
+    }
+
+    function toggleBoxVisibility(boxIdx) {
+        if (hiddenBoxIndices.has(boxIdx)) {
+            hiddenBoxIndices.delete(boxIdx);
+        } else {
+            hiddenBoxIndices.add(boxIdx);
+        }
+        updateModalView();
+    }
+
+    function toggleAllBoxes(show) {
+        if (activeModalItemIndex < 0) return;
+        const item = filteredData[activeModalItemIndex];
+        if (!item) return;
+        const useLlmFilter = document.getElementById('modalUseLlmValidation') 
+            ? document.getElementById('modalUseLlmValidation').checked 
+            : document.getElementById('useLlmValidation').checked;
+        const dets = getDetectionsForItem(item, useLlmFilter);
+
+        if (show) {
+            hiddenBoxIndices.clear();
+        } else {
+            dets.forEach((_, i) => hiddenBoxIndices.add(i));
+        }
+        updateModalView();
     }
 
     function stepModal(delta) {

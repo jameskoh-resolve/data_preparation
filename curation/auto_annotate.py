@@ -436,13 +436,17 @@ def _query_locate_anything_batch_api(
     class_to_prompt_maps: List[Dict[str, str]],
     endpoint_url: str,
     decoding_mode: str,
+    max_classes_per_prompt: int = 15,
 ) -> List[List[Dict[str, Any]]]:
     """Execute batch detection across multiple images using nested class sub-prompts."""
     if endpoint_url.endswith("/detect") or endpoint_url.endswith("/detect_classes"):
         endpoint_url = re.sub(r"/detect(_classes)?$", "/detect_classes_batch", endpoint_url)
 
     files = []
-    data = [("decoding_mode", decoding_mode)]
+    data = [
+        ("decoding_mode", decoding_mode),
+        ("max_classes_per_prompt", str(max_classes_per_prompt)),
+    ]
     opened_files = []
 
     try:
@@ -508,6 +512,7 @@ def run_locate_anything_batch(
     """Execute locate_anything in batch mode across a list of (im_id, local_path) items."""
     endpoint_url = str(model_cfg.get("api_endpoint", model_cfg.get("endpoint_url", "http://localhost:8080/detect_classes")))
     decoding_mode = str(model_cfg.get("decoding_mode", "slow"))
+    max_classes_per_prompt = int(model_cfg.get("max_classes_per_prompt", 15))
 
     classes = model_cfg.get("classes", [])
     if not classes:
@@ -525,7 +530,6 @@ def run_locate_anything_batch(
             alias_to_canonical[alias_norm.replace(" ", "_")] = canonical
 
     class_groups = model_cfg.get("class_groups")
-    max_classes_per_prompt = model_cfg.get("max_classes_per_prompt")
 
     groups = []
     if class_groups:
@@ -575,6 +579,7 @@ def run_locate_anything_batch(
             class_to_prompt_maps=class_to_prompt_maps,
             endpoint_url=endpoint_url,
             decoding_mode=decoding_mode,
+            max_classes_per_prompt=max_classes_per_prompt,
         )
         for (im_id, _), dets in zip(batch_items, batch_dets_list):
             results_dict[im_id] = dets

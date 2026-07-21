@@ -24,33 +24,25 @@ detection_models:
     decoding_mode: hybrid
     use_batch_api: true
     batch_size: 8
+    max_classes_per_prompt: 15
     class_groups:
-      - [top, bottom]
-      - [dress, skirt]
-      - [outerwear, innertop, ethnic_wear]
-      - [shoe, bag]
-      - [belt, tie, gloves, eyewear]
-      - [headwear, scarf]
-      - [hair_accessories]  # Isolated group: expands to aliases [hijab, headband, headscarf, bandana, large hairband]
-      - [earring, necklace]
-      - [bracelet, watch]
-      - [ring, head_jewelry, anklet]
-    classes: [shoe, top, bottom, outerwear, bag, dress, eyewear, ethnic_wear, headwear, bracelet, watch, skirt, earring, scarf, necklace, belt, gloves, tie, ring, hair_accessories, head_jewelry, anklet, innertop]
+      - [earring, necklace, bracelet, watch, ring, shoe]
+    classes: [earring, necklace, bracelet, watch, ring, shoe]
     # class_aliases: query the API with subcategory terms and remap to a canonical output class.
     # The canonical name (e.g. hair_accessories) must also be in 'classes' above.
-    class_aliases:
-      hair_accessories:
-        - hijab
-        - headband
-        - headscarf
-        - bandana
-        - large hairband
-        - hair accessories   # space form — in case the API returns this label directly
+    # class_aliases:
+    #   hair_accessories:
+    #     - hijab
+    #     - headband
+    #     - headscarf
+    #     - bandana
+    #     - large hairband
+    #     - hair accessories   # space form — in case the API returns this label directly
 dedup_policy:
   general:
     IOU: 0.7
     IOMin: 0.7
-    keep_which: keep smallest
+    keep_which: keep smallest 
 
 llm_validation:
   model_type: gpt-4.1-mini
