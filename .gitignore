@@ -117,14 +117,18 @@ catalogs/*.csv
 curated_datasets/
 product_item_13_04/
 
-# Keep output artifacts ignored by default, but version the prediction cache
-# used to resume detector/LLM passes across machines.
-output/*
-!output/westside/
-output/westside/*
-!output/westside/cache/
-output/westside/cache/*
-!output/westside/cache/predictions_cache.json
+# Ignore generated image artifacts
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.webp
+*.bmp
+*.tif
+*.tiff
+*.svg
+*.avif
+*.heic
 
 # Ignore all log files
 *.log
