@@ -244,16 +244,22 @@ def _recognize_single_image(
     im_url: str,
     tag_group_name: str,
     tag_group_version: str,
-) -> tuple[str, bool, list[str]]:
+    exclude_hashes: set[str] = None,
+) -> tuple[str, bool, list[str], str]:
     """Download one image and call the virecognition API directly.
 
-    Returns (im_url, has_human_evidence, tags) where tags is the full list of
+    Returns (im_url, has_human_evidence, tags, md5_hash) where tags is the full list of
     tag strings returned by the model (e.g. ['image_human:model', 'human_angle:front_view']).
     """
     content = get_image_content(im_url)
     if content is None:
         logger.warning("Failed to fetch image {}, skipping", im_url)
-        return im_url, False, []
+        return im_url, False, [], ""
+
+    md5_hash = hashlib.md5(content).hexdigest()
+    if exclude_hashes and md5_hash in exclude_hashes:
+        logger.info("Image {} hash {} is in exclude list, skipping API", im_url, md5_hash)
+        return im_url, False, ["deduplicated"], md5_hash
 
     files = [
         ("object_limit", (None, "1")),
@@ -268,11 +274,11 @@ def _recognize_single_image(
         result = resp.json()
     except Exception as e:
         logger.warning("virecognition API call failed for {}: {}", im_url, e)
-        return im_url, False, []
+        return im_url, False, [], md5_hash
 
     if result.get("status") != "OK" or not result.get("result"):
         logger.warning("virecognition returned non-OK for {}: {}", im_url, result.get("error", result.get("status")))
-        return im_url, False, []
+        return im_url, False, [], md5_hash
 
     all_tags: list[str] = []
     has_human = False
@@ -284,14 +290,15 @@ def _recognize_single_image(
                     all_tags.append(tag_name)
                 if tag_name == "image_human:model":
                     has_human = True
-    return im_url, has_human, sorted(all_tags)
+    return im_url, has_human, sorted(all_tags), md5_hash
 
 
 def _tag_human_presence(
     batch_df: pd.DataFrame,
     model_config_path: str,
     n_jobs: int,
-) -> pd.DataFrame:
+    exclude_hashes: set[str],
+) -> tuple[pd.DataFrame, list[str]]:
     """Tag images using the virecognition API directly and set has_human_evidence column.
 
     Downloads images (with browser headers for ASOS) and POSTs them directly
@@ -308,19 +315,24 @@ def _tag_human_presence(
     logger.info("Tagging {} unique images via virecognition API...", len(unique_urls))
 
     results = Parallel(n_jobs=n_jobs)(
-        delayed(_recognize_single_image)(url, tag_group_name, tag_group_version)
+        delayed(_recognize_single_image)(url, tag_group_name, tag_group_version, exclude_hashes)
         for url in unique_urls
     )
 
     url_to_human: dict[str, bool] = {}
     url_to_tags: dict[str, str] = {}
-    for url, has_human, tags in results:
+    new_hashes: list[str] = []
+    
+    for url, has_human, tags, md5_hash in results:
         url_to_human[url] = has_human
         url_to_tags[url] = ",".join(tags)
+        if md5_hash:
+            new_hashes.append(md5_hash)
+            
     out = batch_df.copy()
     out["has_human_evidence"] = out["im_url"].map(url_to_human).fillna(False)
     out["tags"] = out["im_url"].map(url_to_tags).fillna("")
-    return out
+    return out, new_hashes
 
 
 def _run_sampling(
@@ -341,6 +353,19 @@ def _run_sampling(
     all_rejected: List[pd.DataFrame] = []
     all_evaluated: List[pd.DataFrame] = []
     stats: Dict[str, Any] = {}
+
+    exclude_hashes = set()
+    if "dedup" in cfg and cfg.dedup:
+        exclude_csv = _resolve_path(str(cfg.dedup.exclude_urls_csv))
+        exclude_col = str(cfg.dedup.exclude_hash_column)
+        if os.path.exists(exclude_csv):
+            logger.info(f"Loading exclusion hashes from {exclude_csv} (column: {exclude_col})")
+            exclude_df = pd.read_csv(exclude_csv, usecols=[exclude_col], dtype=str)
+            exclude_hashes = set(exclude_df[exclude_col].dropna().unique())
+            logger.info(f"Loaded {len(exclude_hashes)} unique exclusion hashes")
+        else:
+            logger.warning(f"Exclusion CSV not found: {exclude_csv}")
+
 
     for catalog_cfg in cfg.catalogs:
         catalog_name = str(catalog_cfg.name)
@@ -369,7 +394,16 @@ def _run_sampling(
             batch_size = min(len(remaining), max(missing, missing * oversample_factor))
             batch = remaining.sample(n=batch_size, random_state=round_count).reset_index(drop=True)
 
-            annotated = _tag_human_presence(batch, model_config_path=model_config_path, n_jobs=n_jobs)
+            annotated, batch_hashes = _tag_human_presence(
+                batch, 
+                model_config_path=model_config_path, 
+                n_jobs=n_jobs, 
+                exclude_hashes=exclude_hashes
+            )
+            
+            # Add newly seen hashes so subsequent batches self-deduplicate
+            exclude_hashes.update(batch_hashes)
+            
             if annotated.empty:
                 break
 

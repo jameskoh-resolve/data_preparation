@@ -22,8 +22,10 @@ Detailed class definitions (use these strictly):
 Output rules:
 - visible_classes must contain only canonical names from the target classes, optionally with ' (multiple)' appended.
 - Include a class only if it is clearly visible; if uncertain, do not include.
+- has_human_model must be a boolean indicating whether a human model is clearly visible in the image. Set to false if it's a product-only or ghost mannequin shot.
 - Return JSON only.
 
 Return JSON object with keys:
+- has_human_model: boolean
 - visible_classes: list of strings
 - gpt_reason: string

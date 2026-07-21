@@ -1,0 +1,27 @@
+# Human presence sampling config for Selectedhomme India — catalog_dataset_part_1
+# Small catalog (~4.9k products) — sample directly from full catalog.
+# Run: PYTHONPATH=. .venv/bin/python curation/sampling/human_presence_sampling.py \
+#        configs/catalog_dataset_part_1/selectedhomme_human_presence_sampler.yaml
+
+dedup:
+  exclude_urls_csv: curated_datasets/combined_catalogs/v4/accessory_detect_v4_dataset.csv
+  exclude_hash_column: im_name
+
+sampling:
+  target_per_catalog: 100
+  output_dir: curated_datasets/combined_catalogs/catalog_dataset_part_1/selectedhomme
+  oversample_factor: 3
+  max_rounds: 10
+
+tagging:
+  model_config: fashion_eval_image.yaml
+  n_jobs: 16
+
+catalogs:
+  - name: selectedhomme
+    catalog_csv: catalogs/selectedhomme_catalog.csv
+    image_url_column: main_image_url
+    additional_image_column: additional_image_url
+    category_column: category
+    include_additional_images: true
+    max_images_per_product: 3

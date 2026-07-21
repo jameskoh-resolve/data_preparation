@@ -27,18 +27,20 @@ detection_models:
     batch_size: 8
     max_classes_per_prompt: 15
     class_groups:
-      - [earring, necklace, ring]
-      - [bracelet, watch, shoe]
-    classes: [earring, necklace, bracelet, watch, ring, shoe]
+      - [earring, necklace, ring, bracelet]
+      - [shoe]
+    classes: [earring, necklace, bracelet, ring, shoe]
     # class_aliases: query the API with subcategory terms and remap to a canonical output class.
     # The canonical name (e.g. hair_accessories) must also be in 'classes' above.
     class_aliases:
+      earring:
+        - earring attached to earlobe 
       necklace:
-        - necklace worn around neck
-      watch:
-        - wristwatch with visible watch face
+        - necklace chain around neck
       ring:
         - ring worn on finger
+      bracelet:
+        - bracelet worn on wrist
 
 dedup_policy:
   general:

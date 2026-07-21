@@ -259,11 +259,83 @@ def suppress_duplicates(
                 io_min = compute_io_min(box, acc["box"])
                 if iou >= iou_thresh or io_min >= io_min_thresh:
                     should_suppress = True
+                    # Append source of suppressed box to the accepted box
+                    acc_sources = [s.strip() for s in str(acc.get("source", "")).split(",")]
+                    d_source = str(d.get("source", "")).strip()
+                    if d_source and d_source not in acc_sources:
+                        acc_sources.append(d_source)
+                        acc["source"] = ", ".join(acc_sources)
                     break
             if not should_suppress:
                 accepted.append(d)
         final_dets.extend(accepted)
     return final_dets
+
+
+def enforce_target_area(detections: List[Dict[str, Any]], image_w: Optional[int] = None, image_h: Optional[int] = None) -> List[Dict[str, Any]]:
+    target_areas = {
+        "ring": 78.8,
+        "earring": 216.0
+    }
+    for d in detections:
+        cls_name = str(d.get("name", "")).strip().lower()
+        target_area = target_areas.get(cls_name)
+        if not target_area:
+            continue
+            
+        box = d.get("box")
+        if not box or len(box) != 4:
+            continue
+            
+        x1, y1, x2, y2 = box
+        w = max(0.0, float(x2 - x1))
+        h = max(0.0, float(y2 - y1))
+        
+        current_area = w * h
+        if current_area >= target_area or current_area == 0:
+            continue
+            
+        scale = (target_area / current_area) ** 0.5
+        new_w = w * scale
+        new_h = h * scale
+        
+        cx = x1 + w / 2.0
+        cy = y1 + h / 2.0
+        
+        new_x1 = cx - new_w / 2.0
+        new_y1 = cy - new_h / 2.0
+        new_x2 = cx + new_w / 2.0
+        new_y2 = cy + new_h / 2.0
+        
+        if image_w is not None:
+            if new_x1 < 0:
+                new_x2 += (0 - new_x1)
+                new_x1 = 0
+            if new_x2 > image_w:
+                new_x1 -= (new_x2 - image_w)
+                new_x2 = image_w
+                
+        if image_h is not None:
+            if new_y1 < 0:
+                new_y2 += (0 - new_y1)
+                new_y1 = 0
+            if new_y2 > image_h:
+                new_y1 -= (new_y2 - image_h)
+                new_y2 = image_h
+                
+        new_x1 = max(0.0, new_x1)
+        new_y1 = max(0.0, new_y1)
+        
+        if image_w is not None:
+            new_x1 = min(float(image_w), new_x1)
+            new_x2 = min(float(image_w), new_x2)
+        if image_h is not None:
+            new_y1 = min(float(image_h), new_y1)
+            new_y2 = min(float(image_h), new_y2)
+            
+        d["box"] = [new_x1, new_y1, new_x2, new_y2]
+        
+    return detections
 
 
 def prepare_crop(
@@ -1172,6 +1244,8 @@ def main(
                     deduped_dets.extend(cls_list)
 
             row_dets = deduped_dets
+            
+        row_dets = enforce_target_area(row_dets, image.shape[1], image.shape[0])
 
         # 5. Apply LLM validation (with candidate box count safety caps)
         viz_detections = []
@@ -1371,6 +1445,8 @@ def generate_visualization_cmd(
                 else:
                     deduped_dets.extend(cls_list)
             dets = deduped_dets
+            
+        dets = enforce_target_area(dets, None, None)
 
         # Check predictions cache for LLM validation entries
         viz_dets = []

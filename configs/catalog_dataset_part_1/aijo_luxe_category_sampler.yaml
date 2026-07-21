@@ -1,0 +1,25 @@
+# Category sampling config for Aijo Luxe — catalog_dataset_part_1
+# Run: PYTHONPATH=. .venv/bin/python curation/sampling/category_sampler.py configs/catalog_dataset_part_1/aijo_luxe_category_sampler.yaml
+
+catalog:
+  csv: catalogs/aijo_luxe_catalog.csv
+  image_url_column: main_image_url
+  additional_image_column: additional_image_url
+  category_column: l2_category   # use top-level category for filter matching
+  gender_column: gender
+
+filter_spec: curated_datasets/Aijo_Luxe/categories/aijo_luxe_combined_filter_spec.yaml
+
+dedup:
+  exclude_urls_csv: curated_datasets/combined_catalogs/v4/accessory_detect_v4_dataset.csv
+  exclude_hash_column: im_name
+
+sampling:
+  total_target: 5000     # oversample before human presence filter (~2x target of 2500)
+  min_per_category: 20
+  max_per_category: 1000
+  random_seed: 42
+
+output:
+  pool_csv: curated_datasets/combined_catalogs/catalog_dataset_part_1/aijo_luxe/category_sample_pool.csv
+  stats_csv: curated_datasets/combined_catalogs/catalog_dataset_part_1/aijo_luxe/category_sample_stats.csv

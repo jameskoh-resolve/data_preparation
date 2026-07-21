@@ -126,11 +126,17 @@ def _recognize_single_image(
     im_url: str,
     tag_group_name: str,
     tag_group_version: str,
-) -> tuple[str, list[str]]:
+    exclude_hashes: set[str] = None,
+) -> tuple[str, list[str], str]:
     content = get_image_content(im_url)
     if content is None:
         logger.warning("Failed to fetch image {}, skipping", im_url)
-        return im_url, []
+        return im_url, [], ""
+
+    md5_hash = hashlib.md5(content).hexdigest()
+    if exclude_hashes and md5_hash in exclude_hashes:
+        logger.info("Image {} hash {} is in exclude list, skipping API", im_url, md5_hash)
+        return im_url, ["deduplicated"], md5_hash
 
     files = [
         ("object_limit", (None, "1")),
@@ -145,11 +151,11 @@ def _recognize_single_image(
         result = resp.json()
     except Exception as e:
         logger.warning("virecognition API call failed for {}: {}", im_url, e)
-        return im_url, []
+        return im_url, [], md5_hash
 
     if result.get("status") != "OK" or not result.get("result"):
         logger.warning("virecognition returned non-OK for {}: {}", im_url, result.get("error", result.get("status")))
-        return im_url, []
+        return im_url, [], md5_hash
 
     all_tags: list[str] = []
     for tag_result in result["result"]:
@@ -158,14 +164,15 @@ def _recognize_single_image(
                 tag_name = tag.get("tag", "")
                 if tag_name:
                     all_tags.append(tag_name)
-    return im_url, sorted(all_tags)
+    return im_url, sorted(all_tags), md5_hash
 
 
 def _tag_images(
     batch_df: pd.DataFrame,
     model_config_path: str,
     n_jobs: int,
-) -> pd.DataFrame:
+    exclude_hashes: set[str],
+) -> tuple[pd.DataFrame, list[str]]:
     with open(model_config_path) as f:
         model_cfg = yaml.safe_load(f)
     tag_group_name = model_cfg["name"]
@@ -175,17 +182,21 @@ def _tag_images(
     logger.info("Tagging {} unique images via virecognition API...", len(unique_urls))
 
     results = Parallel(n_jobs=n_jobs)(
-        delayed(_recognize_single_image)(url, tag_group_name, tag_group_version)
+        delayed(_recognize_single_image)(url, tag_group_name, tag_group_version, exclude_hashes)
         for url in unique_urls
     )
 
     url_to_tags: dict[str, str] = {}
-    for url, tags in results:
-        url_to_tags[url] = ",".join(tags)
+    new_hashes: list[str] = []
     
+    for url, tags, md5_hash in results:
+        url_to_tags[url] = ",".join(tags)
+        if md5_hash:
+            new_hashes.append(md5_hash)
+            
     out = batch_df.copy()
     out["tags"] = out["im_url"].map(url_to_tags).fillna("")
-    return out
+    return out, new_hashes
 
 
 def _expand_catalog(catalog_cfg: DictConfig, catalog_name: str, seed: int) -> pd.DataFrame:
@@ -296,7 +307,7 @@ def main(
                 must_include_tagged = must_include_df.copy()
                 logger.info("Skipping virecognition tagging for must-include images (tags already present in input).")
             else:
-                must_include_tagged = _tag_images(must_include_df, model_config_path=model_config_path, n_jobs=n_jobs)
+                must_include_tagged, _ = _tag_images(must_include_df, model_config_path=model_config_path, n_jobs=n_jobs, exclude_hashes=set())
             
             # Step B: LLM Accessory Verification
             must_include_anno = must_include_tagged.copy()
@@ -337,6 +348,7 @@ def main(
     candidate_idx = 0
     round_count = 0
     accepted_count = 0
+    exclude_hashes: set[str] = set()
 
     while accepted_count < target_size and candidate_idx < len(candidates):
         round_count += 1
@@ -357,7 +369,8 @@ def main(
             tagged = batch.copy()
             logger.info("Skipping virecognition tagging (tags already present in input).")
         else:
-            tagged = _tag_images(batch, model_config_path=model_config_path, n_jobs=n_jobs)
+            tagged, batch_hashes = _tag_images(batch, model_config_path=model_config_path, n_jobs=n_jobs, exclude_hashes=exclude_hashes)
+            exclude_hashes.update(batch_hashes)
         
         # Keep only frontward facing human models
         def passes_tags(tags_str: str) -> bool:

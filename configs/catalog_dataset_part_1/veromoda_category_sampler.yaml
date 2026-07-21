@@ -1,0 +1,26 @@
+# Category sampling config for Veromoda India — catalog_dataset_part_1
+# Reuses the existing filter spec from the Veromoda audit.
+# Run: PYTHONPATH=. .venv/bin/python curation/sampling/category_sampler.py configs/catalog_dataset_part_1/veromoda_category_sampler.yaml
+
+catalog:
+  csv: catalogs/veromoda_catalog.csv
+  image_url_column: main_image_url
+  additional_image_column: additional_image_url
+  category_column: category
+  gender_column: gender
+
+filter_spec: curated_datasets/Veromoda_India/categories/veromoda_combined_filter_spec.yaml
+
+dedup:
+  exclude_urls_csv: curated_datasets/combined_catalogs/v4/accessory_detect_v4_dataset.csv
+  exclude_hash_column: im_name
+
+sampling:
+  total_target: 400     # oversample before human presence filter (~2x target of 150)
+  min_per_category: 5
+  max_per_category: 100
+  random_seed: 42
+
+output:
+  pool_csv: curated_datasets/combined_catalogs/catalog_dataset_part_1/veromoda/category_sample_pool.csv
+  stats_csv: curated_datasets/combined_catalogs/catalog_dataset_part_1/veromoda/category_sample_stats.csv

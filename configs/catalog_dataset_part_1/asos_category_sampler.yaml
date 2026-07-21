@@ -1,0 +1,26 @@
+# Category sampling config for ASOS — catalog_dataset_part_1
+# Reuses the existing filter spec from the previous ASOS audit.
+# Run: PYTHONPATH=. .venv/bin/python curation/sampling/category_sampler.py configs/catalog_dataset_part_1/asos_category_sampler.yaml
+
+catalog:
+  csv: catalogs/ASOS_catalog.csv
+  image_url_column: main_image_url
+  additional_image_column: additional_image_url
+  category_column: category
+  gender_column: gender
+
+filter_spec: curated_datasets/ASOS/categories/asos_combined_filter_spec.yaml
+
+dedup:
+  exclude_urls_csv: curated_datasets/combined_catalogs/v4/accessory_detect_v4_dataset.csv
+  exclude_hash_column: im_name
+
+sampling:
+  total_target: 5000     # oversample before human presence filter (~2x target of 1500)
+  min_per_category: 20
+  max_per_category: 500
+  random_seed: 42
+
+output:
+  pool_csv: curated_datasets/combined_catalogs/catalog_dataset_part_1/asos/category_sample_pool.csv
+  stats_csv: curated_datasets/combined_catalogs/catalog_dataset_part_1/asos/category_sample_stats.csv
