@@ -1065,7 +1065,8 @@ def main(
             use_batch_api = bool(model_cfg.get("use_batch_api", True))
             batch_size = int(model_cfg.get("batch_size", 8))
             if use_batch_api and batch_size > 1:
-                cfg_hash = hashlib.md5(json.dumps(model_cfg, sort_keys=True, default=str).encode()).hexdigest()[:8]
+                hash_cfg = {k: v for k, v in model_cfg.items() if k not in ("use_batch_api", "batch_size")}
+                cfg_hash = hashlib.md5(json.dumps(hash_cfg, sort_keys=True, default=str).encode()).hexdigest()[:8]
                 uncached_items = []
                 for _, row in df.iterrows():
                     im_url = row["im_url"]
@@ -1119,7 +1120,8 @@ def main(
         # Run configured detectors
         for model_cfg in detection_models:
             model_type = model_cfg.get("model_type")
-            cfg_hash = hashlib.md5(json.dumps(model_cfg, sort_keys=True, default=str).encode()).hexdigest()[:8]
+            hash_cfg = {k: v for k, v in model_cfg.items() if k not in ("use_batch_api", "batch_size")}
+            cfg_hash = hashlib.md5(json.dumps(hash_cfg, sort_keys=True, default=str).encode()).hexdigest()[:8]
             det_cache_key = f"det:{im_id}:{model_type}:{cfg_hash}"
 
             cached_dets = pred_cache.get(det_cache_key)
