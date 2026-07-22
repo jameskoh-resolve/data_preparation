@@ -1258,6 +1258,10 @@ def main(
                             det_cache.set(b_cache_key, b_dets)
                     det_cache.save()
 
+    if execution_mode == "detection_only":
+        logger.info("Detection-only run complete. Raw detections saved to cache. No CSV/HTML output.")
+        return
+
     for i, (idx, row) in enumerate(df.iterrows(), 1):
         im_url = row["im_url"]
         im_id = row.get("im_id", _stable_image_id(im_url))
@@ -1420,10 +1424,6 @@ def main(
                 det_viz["reason"] = ""
                 viz_detections.append(det_viz)
 
-        # detection_only: no viz or CSV tracking needed — cache is the only output.
-        if execution_mode == "detection_only":
-            continue
-
         viz_items.append({
             "im_id": im_id,
             "im_url": im_url,
@@ -1449,10 +1449,6 @@ def main(
         row_updated["concepts"] = concepts_str
         row_updated["boxes"] = boxes_str
         annotated_rows.append(row_updated)
-
-    if execution_mode == "detection_only":
-        logger.info("Detection-only run complete. Raw detections saved to cache. No CSV/HTML output.")
-        return
 
     # 6. Save results — derive output filename from the input source so repeated
     # runs don't silently overwrite each other.
