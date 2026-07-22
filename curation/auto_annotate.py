@@ -8,7 +8,6 @@ and validates candidate crops using LLM-based verification.
 
 from __future__ import annotations
 
-import ast
 import hashlib
 import json
 import os
@@ -16,17 +15,16 @@ import re
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
 import pandas as pd
 import requests
 import typer
-import yaml
 from dotenv import load_dotenv
 from loguru import logger
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import OmegaConf
 from pydantic import BaseModel, Field
 
 # Load environment credentials from ~/.dltk.config or .env
@@ -118,8 +116,6 @@ class PredictionCache:
         self._data[key] = value
 
     def save(self) -> None:
-        if not self.enabled:
-            return
         try:
             self.cache_file.parent.mkdir(parents=True, exist_ok=True)
             self.cache_file.write_text(json.dumps(self._data, indent=2))
@@ -210,6 +206,31 @@ def compute_io_min(box_a: List[float], box_b: List[float]) -> float:
     return inter / min_area if min_area > 0 else 0.0
 
 
+def preprocess_detections(detections: List[Dict[str, Any]], jewelry_iou_thresh: float = 0.8) -> List[Dict[str, Any]]:
+    """Global cleanup applied across all classes before per-class deduplication.
+
+    Rule A — Jewelry priority: any 'jewelry product' box suppresses every other-class
+              box it overlaps with (IOU > jewelry_iou_thresh).
+    Rule B — Remove 'other': drop all detections whose class is 'other'.
+    """
+    # Rule B: strip 'other' class entirely.
+    dets = [d for d in detections if str(d.get("name", "")).lower() != "other"]
+
+    # Rule A: 'jewelry product' boxes have priority over everything else.
+    jewelry_boxes = [d for d in dets if d.get("name") == "jewelry product"]
+    if jewelry_boxes:
+        suppressed = set()
+        for jp in jewelry_boxes:
+            for d in dets:
+                if d is jp or d.get("name") == "jewelry product":
+                    continue
+                if compute_iou(jp["box"], d["box"]) > jewelry_iou_thresh:
+                    suppressed.add(id(d))
+        dets = [d for d in dets if id(d) not in suppressed]
+
+    return dets
+
+
 def get_sort_key_fn(keep_which: str):
     keep_which = str(keep_which or "").strip().lower()
 
@@ -246,10 +267,39 @@ def suppress_duplicates(
         by_class[d["name"]].append(d)
 
     final_dets = []
-    sort_fn = get_sort_key_fn(keep_which)
+    keep_which_norm = str(keep_which or "").strip().lower()
 
     for cls_name, cls_list in by_class.items():
-        sorted_list = sorted(cls_list, key=sort_fn)
+        if keep_which_norm == "keep smaller_if_encloses_multiple":
+            # Pre-compute enclosed_count for each box:
+            # enclosed_count[id(box)] = # other boxes in this class that this box
+            # is strictly larger than AND significantly overlaps (IOU or IOMin >= thresh).
+            enclosed_counts: Dict[int, int] = {}
+            for d_a in cls_list:
+                box_a = d_a["box"]
+                area_a = max(0.0, (box_a[2] - box_a[0]) * (box_a[3] - box_a[1]))
+                count = 0
+                for d_b in cls_list:
+                    if d_b is d_a:
+                        continue
+                    box_b = d_b["box"]
+                    area_b = max(0.0, (box_b[2] - box_b[0]) * (box_b[3] - box_b[1]))
+                    if area_a <= area_b:
+                        continue
+                    if compute_iou(box_a, box_b) >= iou_thresh or compute_io_min(box_a, box_b) >= io_min_thresh:
+                        count += 1
+                enclosed_counts[id(d_a)] = count
+
+            # Sort so that non-enclosing large boxes come first (preferred by default),
+            # and enclosing boxes (enclosed_count >= 2) come last (candidates for suppression).
+            def _sort_key_encloses(d: dict, ec: Dict[int, int] = enclosed_counts) -> tuple:
+                area = max(0.0, (d["box"][2] - d["box"][0]) * (d["box"][3] - d["box"][1]))
+                return (ec.get(id(d), 0) >= 2, -area)
+
+            sorted_list = sorted(cls_list, key=_sort_key_encloses)
+        else:
+            sorted_list = sorted(cls_list, key=get_sort_key_fn(keep_which))
+
         accepted = []
         for d in sorted_list:
             box = d["box"]
@@ -259,7 +309,7 @@ def suppress_duplicates(
                 io_min = compute_io_min(box, acc["box"])
                 if iou >= iou_thresh or io_min >= io_min_thresh:
                     should_suppress = True
-                    # Append source of suppressed box to the accepted box
+                    # Append source of suppressed box to the accepted box.
                     acc_sources = [s.strip() for s in str(acc.get("source", "")).split(",")]
                     d_source = str(d.get("source", "")).strip()
                     if d_source and d_source not in acc_sources:
@@ -342,6 +392,8 @@ def prepare_crop(
     image: np.ndarray,
     box: List[float],
     padding: float = 0.0,
+    flat_padding_px: Optional[int] = None,
+    min_box_padding: Optional[int] = None,
     contrast: Any = None,
     brightness: Any = None
 ) -> np.ndarray:
@@ -351,7 +403,13 @@ def prepare_crop(
     box_w = x2 - x1
     box_h = y2 - y1
 
-    if padding > 0:
+    # Determine padded coordinates. Priority: flat_padding_px > proportional padding.
+    if flat_padding_px is not None and flat_padding_px > 0:
+        x1_pad = max(0.0, x1 - flat_padding_px)
+        y1_pad = max(0.0, y1 - flat_padding_px)
+        x2_pad = min(float(w), x2 + flat_padding_px)
+        y2_pad = min(float(h), y2 + flat_padding_px)
+    elif padding > 0:
         px = box_w * padding
         py = box_h * padding
         x1_pad = max(0.0, x1 - px)
@@ -360,6 +418,20 @@ def prepare_crop(
         y2_pad = min(float(h), y2 + py)
     else:
         x1_pad, y1_pad, x2_pad, y2_pad = x1, y1, x2, y2
+
+    # min_box_padding: expand crop symmetrically until it reaches the target size.
+    if min_box_padding is not None and min_box_padding > 0:
+        target = float(min_box_padding)
+        curr_w = x2_pad - x1_pad
+        curr_h = y2_pad - y1_pad
+        if curr_w < target:
+            expand_x = (target - curr_w) / 2.0
+            x1_pad = max(0.0, x1_pad - expand_x)
+            x2_pad = min(float(w), x2_pad + expand_x)
+        if curr_h < target:
+            expand_y = (target - curr_h) / 2.0
+            y1_pad = max(0.0, y1_pad - expand_y)
+            y2_pad = min(float(h), y2_pad + expand_y)
 
     x1_idx = max(0, int(round(x1_pad)))
     y1_idx = max(0, int(round(y1_pad)))
@@ -832,6 +904,10 @@ def validate_detection_with_llm(
         return general_cfg.get(key, default)
 
     padding = float(get_cfg_val("padding", 0.0))
+    flat_padding_px_val = get_cfg_val("flat_padding_px", None)
+    min_box_padding_val = get_cfg_val("min_box_padding", None)
+    flat_padding_px = int(flat_padding_px_val) if flat_padding_px_val is not None else None
+    min_box_padding = int(min_box_padding_val) if min_box_padding_val is not None else None
     contrast = get_cfg_val("contrast", None)
     brightness = get_cfg_val("brightness", None)
     min_crop_short_side = int(get_cfg_val("min_crop_short_side", 192))
@@ -852,7 +928,7 @@ def validate_detection_with_llm(
     jpeg_quality = max(1, min(100, jpeg_quality))
 
     # Crop the box
-    crop = prepare_crop(image, det["box"], padding=padding, contrast=contrast, brightness=brightness)
+    crop = prepare_crop(image, det["box"], padding=padding, flat_padding_px=flat_padding_px, min_box_padding=min_box_padding, contrast=contrast, brightness=brightness)
     if crop.size == 0:
         logger.warning("Empty crop for detection of class {}, skipping LLM validation", class_name)
         return True
@@ -901,6 +977,8 @@ def validate_detection_with_llm(
         "system_prompt": system_prompt,
         "user_prompt": user_prompt,
         "padding": padding,
+        "flat_padding_px": flat_padding_px,
+        "min_box_padding": min_box_padding,
         "contrast": contrast,
         "brightness": brightness,
         "min_crop_short_side": min_crop_short_side,
@@ -1054,9 +1132,15 @@ def main(
         cache_dir = output_dir / "cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    pred_cache_file = cache_dir / "predictions_cache.json"
     use_pred_cache = bool(dataset_cfg.get("use_prediction_cache", True))
-    pred_cache = PredictionCache(pred_cache_file, enabled=use_pred_cache)
+    # Three separate caches for different pipeline stages:
+    #   det_cache       — raw detector outputs (pre-dedup, pre-enforce_target_area)
+    #   processed_cache — post-dedup + post-enforce detections; the explicit handoff
+    #                     between detection-only (GPU 1) and LLM validation (GPU 2)
+    #   llm_cache       — LLM validation results (is_valid + reason per box)
+    det_cache       = PredictionCache(cache_dir / "detections_cache.json", enabled=use_pred_cache)
+    processed_cache = PredictionCache(cache_dir / "processed_cache.json",  enabled=use_pred_cache)
+    llm_cache       = PredictionCache(cache_dir / "llm_cache.json",         enabled=use_pred_cache)
 
     # 2. Setup LLM if validation is enabled for this execution mode
     llm_cfg = cfg.get("llm_validation", cfg.get("llm validation"))
@@ -1132,6 +1216,17 @@ def main(
     viz_items = []
     logger.info("Processing {} images...", len(df))
 
+    # Stable hash covering all pre-LLM stages. Changing detection model settings,
+    # dedup policy, or keep_bounding_boxes will invalidate the processed cache.
+    processed_pipeline_cfg = {
+        "detection_models": detection_models,
+        "dedup_policy": dedup_cfg,
+        "keep_bounding_boxes": keep_bbs,
+    }
+    processed_cfg_hash = hashlib.md5(
+        json.dumps(processed_pipeline_cfg, sort_keys=True, default=str).encode()
+    ).hexdigest()[:8]
+
     # Pre-batch run locate_anything detector if use_batch_api is True
     for model_cfg in detection_models:
         if model_cfg.get("model_type") == "locate_anything":
@@ -1145,12 +1240,12 @@ def main(
                     im_url = row["im_url"]
                     im_id = row.get("im_id", _stable_image_id(im_url))
                     det_cache_key = f"det:{im_id}:locate_anything:{cfg_hash}"
-                    if pred_cache.get(det_cache_key) is None:
+                    if det_cache.get(det_cache_key) is None:
                         img, local_path = load_image_and_path(im_url, cache_dir)
                         if img is not None and local_path is not None:
                             uncached_items.append((im_id, local_path))
                         else:
-                            pred_cache.set(det_cache_key, [])
+                            det_cache.set(det_cache_key, [])
 
                 if uncached_items:
                     logger.info("Pre-batch running locate_anything on {} uncached images (batch_size={})", len(uncached_items), batch_size)
@@ -1160,8 +1255,8 @@ def main(
                         batch_dets_dict = run_locate_anything_batch(batch_chunk, model_cfg)
                         for b_im_id, b_dets in batch_dets_dict.items():
                             b_cache_key = f"det:{b_im_id}:locate_anything:{cfg_hash}"
-                            pred_cache.set(b_cache_key, b_dets)
-                    pred_cache.save()
+                            det_cache.set(b_cache_key, b_dets)
+                    det_cache.save()
 
     for i, (idx, row) in enumerate(df.iterrows(), 1):
         im_url = row["im_url"]
@@ -1185,75 +1280,93 @@ def main(
             })
             continue
 
-        # Start with existing boxes if configured
-        row_dets = []
-        if keep_bbs:
-            row_dets.extend(parse_existing_boxes_and_concepts(row))
+        # GPU 1 (detection_only): only run the detector and save raw cache.
+        # GPU 2 (full): check processed cache first; if miss, load raw cache then
+        #               run dedup + enforce + LLM.
+        processed_cache_key = f"processed:{im_id}:{processed_cfg_hash}"
+        _cached_processed = processed_cache.get(processed_cache_key) if execution_mode == "full" else None
 
-        # Run configured detectors
-        for model_cfg in detection_models:
-            model_type = model_cfg.get("model_type")
-            hash_cfg = {k: v for k, v in model_cfg.items() if k not in ("use_batch_api", "batch_size")}
-            cfg_hash = hashlib.md5(json.dumps(hash_cfg, sort_keys=True, default=str).encode()).hexdigest()[:8]
-            det_cache_key = f"det:{im_id}:{model_type}:{cfg_hash}"
+        if _cached_processed is not None:
+            logger.debug("Reusing processed detections for image [{}]", im_url)
+            row_dets = [dict(d) for d in _cached_processed]
+        else:
+            # Run detection (always — on both GPUs, raw results only)
+            row_dets = []
+            if keep_bbs:
+                row_dets.extend(parse_existing_boxes_and_concepts(row))
 
-            cached_dets = pred_cache.get(det_cache_key)
-            if cached_dets is not None:
-                logger.debug("Reusing cached {} detections for image [{}]", model_type, im_url)
-                row_dets.extend(cached_dets)
-            else:
-                m_dets = []
-                if model_type == "fashion_model":
-                    try:
-                        m_dets = run_fashion_model(image, model_cfg)
-                    except Exception as e:
-                        logger.error("Fashion model execution failed: {}", e)
-                elif model_type == "locate_anything":
-                    if local_path is None:
-                        logger.warning("local_path is None for {}; skipping locate_anything.", im_url)
-                    else:
-                        try:
-                            m_dets = run_locate_anything(str(local_path), model_cfg)
-                        except Exception as e:
-                            logger.error("Locate anything execution failed: {}", e)
-                pred_cache.set(det_cache_key, m_dets)
-                row_dets.extend(m_dets)
+            for model_cfg in detection_models:
+                model_type = model_cfg.get("model_type")
+                hash_cfg = {k: v for k, v in model_cfg.items() if k not in ("use_batch_api", "batch_size")}
+                cfg_hash = hashlib.md5(json.dumps(hash_cfg, sort_keys=True, default=str).encode()).hexdigest()[:8]
+                det_cache_key = f"det:{im_id}:{model_type}:{cfg_hash}"
 
-        # 4. Apply deduplication policy
-        if dedup_cfg and row_dets:
-            # We want to resolve policy for each class
-            # To do this, we can run NMS class by class or group all detections
-            by_class = defaultdict(list)
-            for d in row_dets:
-                by_class[d["name"]].append(d)
-
-            deduped_dets = []
-            for cls_name, cls_list in by_class.items():
-                class_policy = dedup_cfg.get(cls_name)
-                if class_policy is None:
-                    class_policy = dedup_cfg.get("general")
-
-                if class_policy:
-                    iou_thresh = float(class_policy.get("IOU", 0.7))
-                    io_min_thresh = float(class_policy.get("IOMin", 0.7))
-                    keep_which = str(class_policy.get("keep_which", "keep biggest"))
-                    # Deduplicate this class
-                    deduped_cls_list = suppress_duplicates(cls_list, iou_thresh, io_min_thresh, keep_which)
-                    deduped_dets.extend(deduped_cls_list)
+                cached_dets = det_cache.get(det_cache_key)
+                if cached_dets is not None:
+                    logger.debug("Reusing cached {} detections for image [{}]", model_type, im_url)
+                    # Deep-copy so downstream in-place mutations never corrupt the cached dicts.
+                    row_dets.extend([dict(d) for d in cached_dets])
                 else:
-                    deduped_dets.extend(cls_list)
+                    m_dets = []
+                    if model_type == "fashion_model":
+                        try:
+                            m_dets = run_fashion_model(image, model_cfg)
+                        except Exception as e:
+                            logger.error("Fashion model execution failed: {}", e)
+                    elif model_type == "locate_anything":
+                        if local_path is None:
+                            logger.warning("local_path is None for {}; skipping locate_anything.", im_url)
+                        else:
+                            try:
+                                m_dets = run_locate_anything(str(local_path), model_cfg)
+                            except Exception as e:
+                                logger.error("Locate anything execution failed: {}", e)
+                    det_cache.set(det_cache_key, m_dets)
+                    # Deep-copy so the cache retains the raw detector output.
+                    row_dets.extend([dict(d) for d in m_dets])
 
-            row_dets = deduped_dets
-            
-        row_dets = enforce_target_area(row_dets, image.shape[1], image.shape[0])
+            det_cache.save()
 
-        # 5. Apply LLM validation (with candidate box count safety caps)
+            if execution_mode == "full":
+                # Pre-dedup global cleanup: remove 'other', apply jewelry priority suppression.
+                row_dets = preprocess_detections(row_dets)
+
+                # Apply deduplication policy (GPU 2 only)
+                if dedup_cfg and row_dets:
+                    by_class = defaultdict(list)
+                    for d in row_dets:
+                        by_class[d["name"]].append(d)
+
+                    deduped_dets = []
+                    for cls_name, cls_list in by_class.items():
+                        class_policy = dedup_cfg.get(cls_name)
+                        if class_policy is None:
+                            class_policy = dedup_cfg.get("general")
+
+                        if class_policy:
+                            iou_thresh = float(class_policy.get("IOU", 0.7))
+                            io_min_thresh = float(class_policy.get("IOMin", 0.7))
+                            keep_which = str(class_policy.get("keep_which", "keep biggest"))
+                            deduped_cls_list = suppress_duplicates(cls_list, iou_thresh, io_min_thresh, keep_which)
+                            deduped_dets.extend(deduped_cls_list)
+                        else:
+                            deduped_dets.extend(cls_list)
+
+                    row_dets = deduped_dets
+
+                row_dets = enforce_target_area(row_dets, image.shape[1], image.shape[0])
+
+                # Save processed detections for resume (GPU 2 only).
+                processed_cache.set(processed_cache_key, [dict(d) for d in row_dets])
+                processed_cache.save()
+
+        # LLM validation
         viz_detections = []
         if llm_executor and row_dets:
             max_per_img = int(llm_cfg.get("max_boxes_per_image", 20))
             max_per_cls = int(llm_cfg.get("max_boxes_per_class", 6))
 
-            # Cap candidate boxes per class per image first
+            # Cap per-class then total to keep LLM cost bounded.
             capped_dets = []
             dets_by_cls = defaultdict(list)
             for d in row_dets:
@@ -1262,61 +1375,43 @@ def main(
             for cls_name, cls_dets in dets_by_cls.items():
                 if len(cls_dets) > max_per_cls:
                     logger.warning(
-                        "Image [{}] has {} candidate boxes for class '{}', exceeding max_boxes_per_class ({}). Truncating to top {}.",
-                        im_url, len(cls_dets), cls_name, max_per_cls, max_per_cls
+                        "Image [{}] has {} boxes for class '{}', capping to {}.",
+                        im_url, len(cls_dets), cls_name, max_per_cls
                     )
                     cls_dets = sorted(cls_dets, key=lambda x: float(x.get("score", 1.0)), reverse=True)[:max_per_cls]
                 capped_dets.extend(cls_dets)
 
-            # Cap total candidate boxes per image
             if len(capped_dets) > max_per_img:
                 logger.warning(
-                    "Image [{}] has {} total candidate boxes, exceeding max_boxes_per_image ({}). Truncating to top {}.",
-                    im_url, len(capped_dets), max_per_img, max_per_img
+                    "Image [{}] has {} total boxes, capping to {}.",
+                    im_url, len(capped_dets), max_per_img
                 )
                 capped_dets = sorted(capped_dets, key=lambda x: float(x.get("score", 1.0)), reverse=True)[:max_per_img]
 
-            # Check if safety cap is exceeded
-            cap_exceeded = (len(row_dets) > max_per_img) or any(len(c_dets) > max_per_cls for c_dets in dets_by_cls.values())
-            if cap_exceeded:
-                logger.warning(
-                    "Image [{}] has {} candidate boxes exceeding safety cap (max_per_img={}, max_per_cls={}). Skipping LLM validation and flagging image.",
-                    im_url, len(row_dets), max_per_img, max_per_cls
-                )
-                capped_dets = sorted(row_dets, key=lambda x: float(x.get("score", 1.0)), reverse=True)[:max_per_img]
-                for d in capped_dets:
-                    det_viz = dict(d)
+            row_dets = capped_dets
+            validated_dets = []
+            for d in row_dets:
+                should_validate = (not llm_classes) or (d["name"].lower() in llm_classes)
+                det_viz = dict(d)
+                if should_validate:
+                    res = validate_detection_with_llm(
+                        image, d, llm_cfg, llm_executor, system_prompt, user_prompt_tmpl,
+                        im_id=im_id, pred_cache=llm_cache
+                    )
+                    is_val = bool(getattr(res, "is_valid", res))
+                    reason_str = str(getattr(res, "reason", "") or "")
+                    det_viz["llm_validated"] = True
+                    det_viz["is_valid"] = is_val
+                    det_viz["reason"] = reason_str
+                    if is_val:
+                        validated_dets.append(d)
+                else:
                     det_viz["llm_validated"] = False
                     det_viz["is_valid"] = True
-                    det_viz["reason"] = "[FLAGGED CAP EXCEEDED] Candidate box safety cap exceeded; LLM validation bypassed."
-                    viz_detections.append(det_viz)
-                row_dets = capped_dets
-            else:
-                row_dets = capped_dets
-                validated_dets = []
-                for d in row_dets:
-                    # Check if we should validate this class
-                    should_validate = (not llm_classes) or (d["name"].lower() in llm_classes)
-                    det_viz = dict(d)
-                    if should_validate:
-                        res = validate_detection_with_llm(
-                            image, d, llm_cfg, llm_executor, system_prompt, user_prompt_tmpl,
-                            im_id=im_id, pred_cache=pred_cache
-                        )
-                        is_val = bool(getattr(res, "is_valid", res))
-                        reason_str = str(getattr(res, "reason", "") or "")
-                        det_viz["llm_validated"] = True
-                        det_viz["is_valid"] = is_val
-                        det_viz["reason"] = reason_str
-                        if is_val:
-                            validated_dets.append(d)
-                    else:
-                        det_viz["llm_validated"] = False
-                        det_viz["is_valid"] = True
-                        det_viz["reason"] = ""
-                        validated_dets.append(d)
-                    viz_detections.append(det_viz)
-                row_dets = validated_dets
+                    det_viz["reason"] = ""
+                    validated_dets.append(d)
+                viz_detections.append(det_viz)
+            row_dets = validated_dets
         else:
             for d in row_dets:
                 det_viz = dict(d)
@@ -1325,14 +1420,18 @@ def main(
                 det_viz["reason"] = ""
                 viz_detections.append(det_viz)
 
+        # detection_only: no viz or CSV tracking needed — cache is the only output.
+        if execution_mode == "detection_only":
+            continue
+
         viz_items.append({
             "im_id": im_id,
             "im_url": im_url,
             "detections": viz_detections,
         })
 
-        # Save prediction cache after processing image
-        pred_cache.save()
+        # Save LLM cache after processing each image.
+        llm_cache.save()
 
         # Form final row values
         # Use None (→ NaN in the CSV) rather than an empty string for missing
@@ -1351,6 +1450,10 @@ def main(
         row_updated["boxes"] = boxes_str
         annotated_rows.append(row_updated)
 
+    if execution_mode == "detection_only":
+        logger.info("Detection-only run complete. Raw detections saved to cache. No CSV/HTML output.")
+        return
+
     # 6. Save results — derive output filename from the input source so repeated
     # runs don't silently overwrite each other.
     if dsttype == "hydravision":
@@ -1358,16 +1461,10 @@ def main(
     else:
         input_path = dataset_cfg.get("path", "annotated_dataset")
         output_stem = Path(input_path).stem
-    output_suffix = "_annotated.csv" if execution_mode == "full" else "_detections_only.csv"
-    output_path = output_dir / f"{output_stem}{output_suffix}"
+    output_path = output_dir / f"{output_stem}_annotated.csv"
     out_df = pd.DataFrame(annotated_rows)
     out_df.to_csv(output_path, index=False)
-    logger.info(
-        "Auto-annotation pipeline finished in mode '{}'. Saved {} rows to {}",
-        execution_mode,
-        len(out_df),
-        output_path,
-    )
+    logger.info("Pipeline finished. Saved {} rows to {}", len(out_df), output_path)
 
     # 7. Generate HTML visualization
     try:
@@ -1394,8 +1491,8 @@ def generate_visualization_cmd(
     output_dir = Path(dataset_cfg.get("output_dir", REPO_ROOT / "curated_datasets/curation"))
     custom_cache = dataset_cfg.get("cache_dir")
     cache_dir = Path(custom_cache) if custom_cache else output_dir / "cache"
-    pred_cache_file = cache_dir / "predictions_cache.json"
-    pred_cache = PredictionCache(pred_cache_file)
+    processed_cache = PredictionCache(cache_dir / "processed_cache.json")
+    llm_cache       = PredictionCache(cache_dir / "llm_cache.json")
 
     image_col = None
     for col in ("im_url", "image_url", "url", "image", "original_url"):
@@ -1407,6 +1504,28 @@ def generate_visualization_cmd(
         raise ValueError(f"Could not find image URL column in dataset.")
 
     keep_bbs = bool(dataset_cfg.get("keep_bounding_boxes", False))
+
+    # Compute the same processed_cfg_hash used during the main run so we can look
+    # up processed_cache entries directly (no need to re-run dedup/enforce here).
+    detection_models_raw = cfg.get("detection_models", cfg.get("detection models", []))
+    if isinstance(detection_models_raw, dict):
+        detection_models_raw = [detection_models_raw] if "model_type" in detection_models_raw else list(detection_models_raw.values())
+    detection_models_list = [
+        OmegaConf.to_container(m, resolve=True) if hasattr(m, "_metadata") else dict(m)
+        for m in detection_models_raw
+    ]
+    dedup_cfg_raw = cfg.get("dedup_policy", cfg.get("dedup policy", {}))
+    if dedup_cfg_raw:
+        dedup_cfg_raw = OmegaConf.to_container(dedup_cfg_raw, resolve=True)
+    processed_pipeline_cfg = {
+        "detection_models": detection_models_list,
+        "dedup_policy": dedup_cfg_raw,
+        "keep_bounding_boxes": keep_bbs,
+    }
+    processed_cfg_hash = hashlib.md5(
+        json.dumps(processed_pipeline_cfg, sort_keys=True, default=str).encode()
+    ).hexdigest()[:8]
+
     viz_items = []
     for _, row in df.iterrows():
         im_url = str(row[image_col]).strip()
@@ -1414,41 +1533,18 @@ def generate_visualization_cmd(
             continue
         im_id = row.get("im_id", _stable_image_id(im_url))
 
-        dets = []
-        if keep_bbs:
-            dets.extend(parse_existing_boxes_and_concepts(row))
+        # Read processed detections directly — no dedup/enforce re-run needed.
+        processed_cache_key = f"processed:{im_id}:{processed_cfg_hash}"
+        cached_processed = processed_cache.get(processed_cache_key)
+        if cached_processed is not None:
+            dets = [dict(d) for d in cached_processed]
+        else:
+            # Fallback: no processed cache entry — show empty (run main pipeline first).
+            dets = []
+            if keep_bbs:
+                dets.extend(parse_existing_boxes_and_concepts(row))
 
-        # Check predictions cache for detector keys
-        for key, val in pred_cache.cache.items():
-            if key.startswith(f"det:{im_id}:") and isinstance(val, list):
-                dets.extend(val)
-
-        # Apply deduplication policy across all detection sources (GT + detectors)
-        dedup_cfg = cfg.get("dedup_policy", {})
-        if dedup_cfg and dets:
-            by_class = defaultdict(list)
-            for d in dets:
-                by_class[d["name"]].append(d)
-
-            deduped_dets = []
-            for cls_name, cls_list in by_class.items():
-                class_policy = dedup_cfg.get(cls_name)
-                if class_policy is None:
-                    class_policy = dedup_cfg.get("general")
-
-                if class_policy:
-                    iou_thresh = float(class_policy.get("IOU", 0.7))
-                    io_min_thresh = float(class_policy.get("IOMin", 0.7))
-                    keep_which = str(class_policy.get("keep_which", "keep biggest"))
-                    deduped_cls_list = suppress_duplicates(cls_list, iou_thresh, io_min_thresh, keep_which)
-                    deduped_dets.extend(deduped_cls_list)
-                else:
-                    deduped_dets.extend(cls_list)
-            dets = deduped_dets
-            
-        dets = enforce_target_area(dets, None, None)
-
-        # Check predictions cache for LLM validation entries
+        # Annotate each detection with LLM result if available.
         viz_dets = []
         for d in dets:
             d_entry = dict(d)
@@ -1456,9 +1552,8 @@ def generate_visualization_cmd(
             box_str = f"[{int(round(box[0]))},{int(round(box[1]))},{int(round(box[2]))},{int(round(box[3]))}]"
             cls_name = d.get("name", "")
 
-            # Look up any LLM cache key for this box
             matched_llm = None
-            for k, v in pred_cache.cache.items():
+            for k, v in llm_cache.cache.items():
                 if k.startswith(f"llm:{im_id}:{cls_name}:{box_str}:") and isinstance(v, dict):
                     matched_llm = v
                     break

@@ -47,13 +47,22 @@ dedup_policy:
     IOU: 0.7
     IOMin: 0.7
     keep_which: keep smallest 
+  necklace:
+    IOU: 0.90
+    IOMin: 0.90
+    keep_which: keep smallest
+  bracelet:
+    IOU: 0.4
+    IOMin: 0.90
+    keep_which: keep smaller_if_encloses_multiple
 
 llm_validation:
   model_type: gpt-4.1-mini
   prompt: llm/prompts/verify_classes_prompt.txt
   max_boxes_per_image: 12
   max_boxes_per_class: 6
-  # classes omitted — validates ALL detected classes
+  classes: [earring, necklace, bracelet, ring]  # only these classes are sent to the LLM
+  
   general:
     padding: 0.05
     # Upscale tiny crops before LLM validation to reduce "too blurry/unclear" failures.
@@ -134,7 +143,8 @@ llm_validation:
   # ── Jewelry ────────────────────────────────────────────────────────────────
 
   earring:
-    padding: 0.8
+    flat_padding_px: 120     # fixed 120 px border around the detection box
+    min_box_padding: 200     # expand crop until at least 200×200 px
     task: "Verify if an earring or ear jewelry is clearly attached to a person's ear or earlobe. The crop includes surrounding ear/head context — confirm the item is attached to an earlobe. Do NOT mistake hair strands, skin highlights, or specular spots for earrings."
 
   necklace:
@@ -145,12 +155,13 @@ llm_validation:
     padding: 0.5
     task: "Verify if there is any bracelet, bangle, cuff, wristband, string/thread band, or arm chain visible on a person's wrist or arm. Accept any wrist/arm jewelry item or band."
 
-  watch:
-    padding: 0.8
-    task: "Verify if there is a watch worn on a person's wrist AND that a distinct, clearly visible watch face (analog clock face, digital display, or smartwatch screen) is explicitly visible. If the watch face is hidden, turned away, or not clearly visible, mark as INVALID."
+  # watch:
+  #   padding: 0.8
+  #   task: "Verify if there is a watch worn on a person's wrist AND that a distinct, clearly visible watch face (analog clock face, digital display, or smartwatch screen) is explicitly visible. If the watch face is hidden, turned away, or not clearly visible, mark as INVALID."
 
   ring:
-    padding: 1.2
+    flat_padding_px: 80      # fixed 80 px border around the ring detection
+    min_box_padding: 160     # expand crop until at least 160×160 px
     task: "Verify if there is a ring clearly visible worn on a human finger. The crop includes surrounding hand context — confirm that the ring is attached to a human finger on a hand. Do NOT mistake nail polish, skin texture, background objects, or loose standalone objects as a worn ring."
 
   # head_jewelry:

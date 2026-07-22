@@ -133,5 +133,7 @@ product_item_13_04/
 # Ignore all log files
 *.log
 
-# Explicitly track predictions cache
-!output/westside/cache/predictions_cache.json
+# Explicitly track pipeline caches (GPU1→GPU2 handoff)
+!output/westside/cache/detections_cache.json
+!output/westside/cache/processed_cache.json
+!output/westside/cache/llm_cache.json
