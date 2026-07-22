@@ -132,3 +132,6 @@ product_item_13_04/
 
 # Ignore all log files
 *.log
+
+# Explicitly track predictions cache
+!output/westside/cache/predictions_cache.json

@@ -13,10 +13,10 @@ from path import Path
 
 
 # Update these values directly before running the script.
-CATALOG_NAME = "lyst"
-CATALOG_ID = "3"
-ACCESS_KEY = "77b0f1bdcc024221d303c94e4650936f799748e8"
-SECRET_KEY = "c391c75f9af70388165513d85663611598ab2677"
+CATALOG_NAME = "ASOS"
+CATALOG_ID = "10"
+ACCESS_KEY = "e209f2d10fad67108fa5c0373cc69ce40796a3da"
+SECRET_KEY = "bd724fd328f00d2612ff22fcba2f9b0cedd6f3ad"
 OUTPUT_CSV = None  # e.g. "datasets/catalogs/my_catalog.csv"
 
 

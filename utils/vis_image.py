@@ -113,6 +113,7 @@ def _get_image_request_headers(im_url: str) -> dict[str, str]:
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/143.0.0.0 Safari/537.36"
             ),
+            "ngrok-skip-browser-warning": "69420"
         }
     return {}
 
@@ -195,8 +196,15 @@ def get_image_content(
     # if content is an url
     if isinstance(im_url, str) and im_url.startswith("http"):
         try:
+            # --- ASOS Proxy Routing ---
+            if "asos-media.com" in im_url or "asos.com" in im_url:
+                import urllib.parse
+                im_url = f"https://rely-conflict-desecrate.ngrok-free.dev/image-proxy/?url={urllib.parse.quote(im_url)}"
+            # --------------------------
             headers = _get_image_request_headers(im_url)
-            resp = requests.get(im_url, timeout=timeout, headers=headers)
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            resp = requests.get(im_url, timeout=timeout, headers=headers, verify=False)
             resp.raise_for_status()
             content = resp.content
         except Exception as e:

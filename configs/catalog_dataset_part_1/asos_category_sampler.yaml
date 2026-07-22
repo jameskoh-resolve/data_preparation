@@ -16,9 +16,9 @@ dedup:
   exclude_hash_column: im_name
 
 sampling:
-  total_target: 5000     # oversample before human presence filter (~2x target of 1500)
+  total_target: 9999999
   min_per_category: 20
-  max_per_category: 500
+  max_per_category: 9999999
   random_seed: 42
 
 output:

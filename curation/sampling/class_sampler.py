@@ -290,6 +290,7 @@ def main(
 
     accepted_rows: List[pd.DataFrame] = []
     rejected_rows: List[pd.DataFrame] = []
+    fallback_rows: List[pd.DataFrame] = []
 
     # Pre-accept must-include category images after running tagging and LLM verification on them
     if must_include_categories:
@@ -443,10 +444,33 @@ def main(
 
         if not negatives.empty:
             negatives["reject_reason"] = "no_visible_accessories"
-            rejected_rows.append(negatives)
+            fallback_rows.append(negatives)
 
     # Wrap up and Save Results
     accepted_df = pd.concat(accepted_rows, ignore_index=True) if accepted_rows else pd.DataFrame()
+    fallback_df = pd.concat(fallback_rows, ignore_index=True) if fallback_rows else pd.DataFrame()
+    
+    if len(accepted_df) < target_size and not fallback_df.empty:
+        missing = target_size - len(accepted_df)
+        fallback_sample = fallback_df.head(missing).copy()
+        logger.info("Target not met ({} / {}). Drawing {} images from fallback pool.", len(accepted_df), target_size, len(fallback_sample))
+        
+        def add_fallback_tag(tags_str):
+            tags = [t.strip() for t in str(tags_str).split(",") if t.strip()]
+            tags.append("fallback_sample:true")
+            return ",".join(tags)
+            
+        fallback_sample["tags"] = fallback_sample["tags"].apply(add_fallback_tag)
+        accepted_df = pd.concat([accepted_df, fallback_sample], ignore_index=True)
+        
+        # Remaining fallback images are truly rejected
+        remaining_fallback = fallback_df.iloc[missing:].copy()
+        if not remaining_fallback.empty:
+            rejected_rows.append(remaining_fallback)
+    else:
+        if not fallback_df.empty:
+            rejected_rows.append(fallback_df)
+
     rejected_df = pd.concat(rejected_rows, ignore_index=True) if rejected_rows else pd.DataFrame()
 
     if not accepted_df.empty:

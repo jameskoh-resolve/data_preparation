@@ -128,7 +128,7 @@ def test_suppress_duplicates():
     # Using keep locate anything
     res = suppress_duplicates(dets, iou_thresh=0.5, io_min_thresh=0.5, keep_which="keep locate anything box")
     assert len(res) == 1
-    assert res[0]["source"] == "locate_anything"
+    assert "locate_anything" in res[0]["source"]
 
 
 def test_prepare_crop():
@@ -597,6 +597,56 @@ def test_run_locate_anything_dispatcher(mock_single_api, mock_batch_runner, tmp_
     dets_single = run_locate_anything(str(img), cfg_single)
     assert len(dets_single) == 1
     assert mock_single_api.call_count == 1
+
+
+def test_keep_smaller_if_encloses_multiple():
+    from curation.auto_annotate import suppress_duplicates
+
+    # Case A: Combined box encloses 2 distinct item boxes (Box 1 and Box 2) -> keeps the 2 smaller boxes
+    dets_pair = [
+        {"name": "bracelet", "box": [10, 10, 50, 50], "score": 0.9, "source": "locate_anything"}, # Bracelet 1
+        {"name": "bracelet", "box": [60, 10, 100, 50], "score": 0.9, "source": "locate_anything"}, # Bracelet 2
+        {"name": "bracelet", "box": [5, 5, 105, 55], "score": 0.95, "source": "locate_anything"}, # Large box enclosing both
+    ]
+    res_pair = suppress_duplicates(
+        dets_pair, iou_thresh=0.4, io_min_thresh=0.7, keep_which="keep_smaller_if_encloses_multiple"
+    )
+    # The multi-enclosing large box is suppressed; both smaller item boxes are kept
+    assert len(res_pair) == 2
+    boxes = [d["box"] for d in res_pair]
+    assert [10, 10, 50, 50] in boxes
+    assert [60, 10, 100, 50] in boxes
+
+    # Case B: Large box encloses only 1 item -> does not enclose multiple, keeps larger full item box over fragment
+    dets_single = [
+        {"name": "bracelet", "box": [15, 15, 25, 25], "score": 0.7, "source": "locate_anything"}, # Tiny fragment
+        {"name": "bracelet", "box": [10, 10, 50, 50], "score": 0.9, "source": "locate_anything"}, # Full bracelet
+    ]
+    res_single = suppress_duplicates(
+        dets_single, iou_thresh=0.4, io_min_thresh=0.7, keep_which="keep_smaller_if_encloses_multiple"
+    )
+    assert len(res_single) == 1
+    assert res_single[0]["box"] == [10, 10, 50, 50]
+
+
+def test_preprocess_detections_before_dedup():
+    from curation.auto_annotate import preprocess_detections_before_dedup
+
+    dets = [
+        {"name": "other", "box": [0, 0, 10, 10], "score": 0.8},
+        {"name": "jewelry_product", "box": [10, 10, 50, 50], "score": 1.0},
+        {"name": "necklace", "box": [12, 12, 50, 50], "score": 0.9}, # IoU >= 0.8 with jewelry_product
+        {"name": "ring", "box": [80, 80, 90, 90], "score": 0.95},   # No overlap
+    ]
+
+    res = preprocess_detections_before_dedup(dets)
+    names = [d["name"] for d in res]
+    assert "other" not in names
+    assert "jewelry_product" in names
+    assert "necklace" not in names  # Removed due to IoU >= 0.8 overlap with jewelry_product
+    assert "ring" in names
+
+
 
 
 

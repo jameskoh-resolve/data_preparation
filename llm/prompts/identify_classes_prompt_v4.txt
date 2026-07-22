@@ -7,7 +7,7 @@ Detailed class definitions (use these strictly):
 - belt: a clothing belt worn around waist/hips, usually with visible leather strap and often buckle. Do not confuse seams, folds, or bag straps as belt.
 - ring: finger ring on a human hand/finger.
 - gloves: gloves or mittens covering human hand(s)/fingers.
-- hair_accessories: obvious worn hair accessory on a person (headband, large hairband, bandana, headscarf). Do NOT count ponytails/hair ties that are not clearly visible as accessory product.
+- hair_accessories: obvious worn hair accessory on a person (headband, large hairband, bandana, headscarf, hijab). Do NOT count ponytails/hair ties that are not clearly visible as accessory product.
 - scarf: scarf worn around neck/shoulder as a textile accessory.
 - tie: necktie/bowtie worn around neck.
 - earring: jewelry attached to ear/lobe. Do NOT mistake hair strands/highlights/specular spots for earrings.

@@ -1,0 +1,34 @@
+run:
+  target_size: 2500
+  catalog_name: aijo_luxe
+  seed: 42
+  output_dir: curated_datasets/combined_catalogs/catalog_dataset_part_1/aijo_luxe
+  batch_size: 2000
+catalog:
+  csv: curated_datasets/combined_catalogs/catalog_dataset_part_1/aijo_luxe/category_sample_pool.csv
+  image_url_column: im_url
+dedup:
+  exclude_urls_csv: curated_datasets/combined_catalogs/v4/accessory_detect_v4_dataset.csv
+  exclude_hash_column: im_name
+tagging:
+  model_config: fashion_eval_image.yaml
+  n_jobs: 16
+llm:
+  model: gpt-4.1-mini-2025-04-14
+  workers: 8
+classes:
+  relevant_classes:
+  - belt
+  - ring
+  - gloves
+  - hair_accessories
+  - scarf
+  - tie
+  - earring
+  - bracelet
+  - necklace
+  - watch
+  - headwear
+  - bag
+  - eyewear
+  - innertop
