@@ -126,11 +126,39 @@ class LLMExecutor:
     ) -> str | T:
         """Invoke the LLM client, returning string or Pydantic model."""
         if output_object_type is not None:
-            # Both backends' with_structured_output() return Pydantic model directly
             structured_client = self.client.with_structured_output(output_object_type)
-            return structured_client.invoke(llm_messages)
+            try:
+                result = structured_client.invoke(llm_messages)
+                # Some LangChain/model version combinations return the raw AIMessage
+                # instead of the parsed Pydantic model. Unwrap if needed.
+                if isinstance(result, output_object_type):
+                    return result
+                parsed = getattr(result, "parsed", None) or (getattr(result, "additional_kwargs", None) or {}).get("parsed")
+                if isinstance(parsed, output_object_type):
+                    return parsed
+                return result
+            except Exception as e:
+                # LangChain raises "does not have a 'parsed' field nor a 'refusal' field"
+                # when the API response is valid but stored in additional_kwargs['parsed'].
+                # Fallback: do a plain invoke and parse the JSON content manually.
+                err_str = str(e)
+                if "parsed" in err_str or "refusal" in err_str:
+                    import json as _json
+                    raw = self.client.invoke(llm_messages)
+                    # Try additional_kwargs['parsed'] first (structured output path)
+                    parsed = (getattr(raw, "additional_kwargs", None) or {}).get("parsed")
+                    if isinstance(parsed, output_object_type):
+                        logger.debug("Recovered structured output from additional_kwargs for {}", output_object_type.__name__)
+                        return parsed
+                    # Fall back to parsing the raw JSON content string
+                    content = getattr(raw, "content", None)
+                    if content:
+                        try:
+                            return output_object_type(**_json.loads(content))
+                        except Exception:
+                            pass
+                raise
         else:
-            # Simple text response - both backends return AIMessage
             response = self.client.invoke(llm_messages)
             return response.content
 

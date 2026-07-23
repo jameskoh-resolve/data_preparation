@@ -1,0 +1,13 @@
+You are looking at two cropped images from a fashion catalog, both centered on the same detected region.
+
+Image 1 (tight crop): shows only the detected region itself, with minimal padding. This is the exact item being verified.
+Image 2 (context crop): shows the same region with extra surrounding padding, for context only.
+
+Task:
+{task_prompt}
+
+Important: base your verdict on the item shown in Image 1 (the tight crop). Only use Image 2 to help disambiguate or confirm what the item in Image 1 actually is (e.g. confirming it's worn on the correct body part). If Image 2 contains a different or additional instance of the target class that is NOT the one shown in Image 1, do NOT count it — verify only the item in Image 1.
+
+Return a JSON object with keys:
+- is_valid: boolean (true if the class '{class_name}' shown in Image 1 is clearly present and correctly identified, false otherwise)
+- reason: string (brief explanation of the validation result)

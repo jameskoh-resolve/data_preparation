@@ -50,9 +50,6 @@ class VerificationResult(BaseModel):
     is_valid: bool = Field(..., description="Whether the crop contains the specified class of accessory or item.")
     reason: str = Field(..., description="Short explanation of the validation result.")
 
-    def __bool__(self) -> bool:
-        return self.is_valid
-
 
 class DetectorRegistry:
     _detector_instances = {}
@@ -951,6 +948,38 @@ def validate_detection_with_llm(
         return True
     crop_bytes = encoded_img.tobytes()
 
+    # Optional dual-crop mode: large padding/min_box_padding gives the LLM useful
+    # context, but can also pull neighboring objects (e.g. another ring, a bracelet)
+    # into frame. For classes prone to this, also send a tight crop (near-zero
+    # padding) of exactly the detection box, so the LLM can anchor "the item" to
+    # the tight crop and use the padded crop only for surrounding context.
+    dual_crop = bool(get_cfg_val("dual_crop", False))
+    tight_crop_bytes = None
+    if dual_crop:
+        tight_flat_padding_px = int(get_cfg_val("tight_flat_padding_px", 4))
+        tight_crop = prepare_crop(
+            image, det["box"], padding=0.0, flat_padding_px=tight_flat_padding_px,
+            min_box_padding=None, contrast=contrast, brightness=brightness,
+        )
+        if tight_crop.size == 0:
+            logger.warning("Empty tight crop for detection of class {}, falling back to single-crop validation", class_name)
+            dual_crop = False
+        else:
+            tight_crop = _upscale_crop_if_too_small(
+                tight_crop,
+                min_short_side=min_crop_short_side,
+                min_long_side=min_crop_long_side,
+                interpolation=interpolation,
+            )
+            success, encoded_tight = cv2.imencode(
+                ".jpg", tight_crop, [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality],
+            )
+            if not success:
+                logger.warning("Failed to encode tight crop to JPEG for class {}, falling back to single-crop validation", class_name)
+                dual_crop = False
+            else:
+                tight_crop_bytes = encoded_tight.tobytes()
+
     # Determine class-specific task or prompt override
     custom_task = class_override.get("task", class_override.get("task_prompt", None))
     custom_prompt = class_override.get("prompt", None)
@@ -986,6 +1015,8 @@ def validate_detection_with_llm(
         "upscale_interpolation": interpolation_name,
         "jpeg_quality": jpeg_quality,
         "llm_model": str(llm_cfg.get("model_type", "")),
+        "dual_crop": dual_crop,
+        "tight_flat_padding_px": int(get_cfg_val("tight_flat_padding_px", 4)) if dual_crop else None,
     }
     prompt_hash = hashlib.md5(json.dumps(cache_signature, sort_keys=True, default=str).encode()).hexdigest()[:12]
     cache_key = f"llm:{im_id}:{class_name}:{box_str}:{prompt_hash}"
@@ -1004,21 +1035,23 @@ def validate_detection_with_llm(
         HumanMessage(content=user_prompt)
     ]
 
+    images = [tight_crop_bytes, crop_bytes] if dual_crop else [crop_bytes]
     try:
         parsed = executor.predict(
             messages,
-            images=[crop_bytes],
+            images=images,
             output_object_type=VerificationResult,
         )
         is_valid = bool(parsed.is_valid)
         reason_str = str(getattr(parsed, "reason", "") or "")
 
-        # If LLM rejects due to blurriness, accept detection and flag crop as blurry
+        # If LLM rejects due to blurriness, keep the detection invalid but tag the
+        # reason so it's easy to distinguish "flagged as blurry" from other rejections
+        # during review.
         blurry_keywords = ["blurry", "blurred", "lacks clear detail", "blurry and lacks", "out of focus"]
         if not is_valid and any(kw in reason_str.lower() for kw in blurry_keywords):
-            is_valid = True
             reason_str = f"[FLAGGED BLURRY] {reason_str}"
-            logger.info("LLM crop for {} is blurry — accepting detection and flagging.", class_name)
+            logger.info("LLM crop for {} is blurry — flagging as invalid for review.", class_name)
 
         if pred_cache:
             pred_cache.set(cache_key, {"is_valid": is_valid, "reason": reason_str})
@@ -1131,8 +1164,11 @@ def main(
     else:
         cache_dir = output_dir / "cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
+    image_cache_dir = cache_dir / "image_cache"
+    image_cache_dir.mkdir(parents=True, exist_ok=True)
 
-    use_pred_cache = bool(dataset_cfg.get("use_prediction_cache", True))
+    default_pred_cache = execution_mode != "detection_only"
+    use_pred_cache = bool(dataset_cfg.get("reuse_cache", default_pred_cache))
     # Three separate caches for different pipeline stages:
     #   det_cache       — raw detector outputs (pre-dedup, pre-enforce_target_area)
     #   processed_cache — post-dedup + post-enforce detections; the explicit handoff
@@ -1241,7 +1277,7 @@ def main(
                     im_id = row.get("im_id", _stable_image_id(im_url))
                     det_cache_key = f"det:{im_id}:locate_anything:{cfg_hash}"
                     if det_cache.get(det_cache_key) is None:
-                        img, local_path = load_image_and_path(im_url, cache_dir)
+                        img, local_path = load_image_and_path(im_url, image_cache_dir)
                         if img is not None and local_path is not None:
                             uncached_items.append((im_id, local_path))
                         else:
@@ -1256,7 +1292,7 @@ def main(
                         for b_im_id, b_dets in batch_dets_dict.items():
                             b_cache_key = f"det:{b_im_id}:locate_anything:{cfg_hash}"
                             det_cache.set(b_cache_key, b_dets)
-                    det_cache.save()
+                        det_cache.save()
 
     if execution_mode == "detection_only":
         logger.info("Detection-only run complete. Raw detections saved to cache. No CSV/HTML output.")
@@ -1268,7 +1304,7 @@ def main(
         logger.info("Processing image [{}/{}]: {}", i, len(df), im_url)
 
         # Download/read image
-        image, local_path = load_image_and_path(im_url, cache_dir)
+        image, local_path = load_image_and_path(im_url, image_cache_dir)
         if image is None:
             # Preserve the row in the output (with NaN annotations) so the output
             # CSV stays aligned with the input and downstream positional joins don't break.
@@ -1472,158 +1508,60 @@ def main(
     except Exception as e:
         logger.warning("Failed to generate HTML visualization: {}", e)
 
+    # 8. Save crop images to disk for downstream review and use.
+    # Each detection (valid and flagged) is cropped from the full image and written to
+    # {output_dir}/crops/{class_name}/{im_id}_{box_idx}.jpg
+    try:
+        crops_root = output_dir / "crops"
+        llm_cfg_crops = cfg.get("llm_validation", cfg.get("llm validation", {})) if execution_mode == "full" else {}
+        general_crop_cfg = llm_cfg_crops.get("general", {}) if llm_cfg_crops else {}
+        crop_padding = float(general_crop_cfg.get("padding", 0.0))
+        crop_flat_px = general_crop_cfg.get("flat_padding_px", None)
+        crop_min_box = general_crop_cfg.get("min_box_padding", None)
+        crop_flat_px = int(crop_flat_px) if crop_flat_px is not None else None
+        crop_min_box = int(crop_min_box) if crop_min_box is not None else None
+        crop_quality = max(1, min(100, int(general_crop_cfg.get("jpeg_quality", 95))))
 
-@app.command(name="visualize")
-def generate_visualization_cmd(
-    config_file: str = typer.Argument(..., help="Path to auto-annotate config YAML"),
-):
-    """Generate or refresh HTML visualization gallery from predictions cache & dataset."""
-    from utils.html_visualization import generate_html_visualization
+        saved_count = 0
+        for viz_item in viz_items:
+            im_id_crop = viz_item["im_id"]
+            # The on-disk image cache filename is keyed by _stable_image_id(im_url)
+            # (see load_image_and_path), which can differ from the dataset's own
+            # `im_id` column. Recompute the hash from im_url to find the right file.
+            cache_hash = _stable_image_id(viz_item.get("im_url", "")) or im_id_crop
+            cached_img_path = image_cache_dir / f"{cache_hash}.jpg"
+            if not cached_img_path.exists():
+                continue
+            img_for_crop = cv2.imread(str(cached_img_path))
+            if img_for_crop is None:
+                continue
+            for b_idx, det in enumerate(viz_item["detections"]):
+                cls_name = det.get("name", "unknown")
+                box = det.get("box", [0, 0, 0, 0])
+                crop_dir = crops_root / cls_name
+                crop_dir.mkdir(parents=True, exist_ok=True)
+                crop_path = crop_dir / f"{im_id_crop}_{b_idx}.jpg"
+                crop = prepare_crop(
+                    img_for_crop, box,
+                    padding=crop_padding,
+                    flat_padding_px=crop_flat_px,
+                    min_box_padding=crop_min_box,
+                )
+                if crop.size == 0:
+                    continue
+                cv2.imwrite(str(crop_path), crop, [int(cv2.IMWRITE_JPEG_QUALITY), crop_quality])
+                saved_count += 1
+        logger.info("Saved {} crop images to {}", saved_count, crops_root)
+    except Exception as e:
+        logger.warning("Failed to save crop images: {}", e)
 
-    cfg = OmegaConf.load(str(config_file))
-    dataset_cfg = cfg.get("dataset", {})
-    df, original_filename = resolve_dataset_csv(dataset_cfg, prefer_azure=True)
-
-    output_dir = Path(dataset_cfg.get("output_dir", REPO_ROOT / "curated_datasets/curation"))
-    custom_cache = dataset_cfg.get("cache_dir")
-    cache_dir = Path(custom_cache) if custom_cache else output_dir / "cache"
-    processed_cache = PredictionCache(cache_dir / "processed_cache.json")
-    llm_cache       = PredictionCache(cache_dir / "llm_cache.json")
-
-    image_col = None
-    for col in ("im_url", "image_url", "url", "image", "original_url"):
-        if col in df.columns:
-            image_col = col
-            break
-
-    if not image_col:
-        raise ValueError(f"Could not find image URL column in dataset.")
-
-    keep_bbs = bool(dataset_cfg.get("keep_bounding_boxes", False))
-
-    # Compute the same processed_cfg_hash used during the main run so we can look
-    # up processed_cache entries directly (no need to re-run dedup/enforce here).
-    detection_models_raw = cfg.get("detection_models", cfg.get("detection models", []))
-    if isinstance(detection_models_raw, dict):
-        detection_models_raw = [detection_models_raw] if "model_type" in detection_models_raw else list(detection_models_raw.values())
-    detection_models_list = [
-        OmegaConf.to_container(m, resolve=True) if hasattr(m, "_metadata") else dict(m)
-        for m in detection_models_raw
-    ]
-    dedup_cfg_raw = cfg.get("dedup_policy", cfg.get("dedup policy", {}))
-    if dedup_cfg_raw:
-        dedup_cfg_raw = OmegaConf.to_container(dedup_cfg_raw, resolve=True)
-    processed_pipeline_cfg = {
-        "detection_models": detection_models_list,
-        "dedup_policy": dedup_cfg_raw,
-        "keep_bounding_boxes": keep_bbs,
-    }
-    processed_cfg_hash = hashlib.md5(
-        json.dumps(processed_pipeline_cfg, sort_keys=True, default=str).encode()
-    ).hexdigest()[:8]
-
-    viz_items = []
-    for _, row in df.iterrows():
-        im_url = str(row[image_col]).strip()
-        if not im_url:
-            continue
-        im_id = row.get("im_id", _stable_image_id(im_url))
-
-        # Read processed detections directly — no dedup/enforce re-run needed.
-        processed_cache_key = f"processed:{im_id}:{processed_cfg_hash}"
-        cached_processed = processed_cache.get(processed_cache_key)
-        if cached_processed is not None:
-            dets = [dict(d) for d in cached_processed]
-        else:
-            # Fallback: no processed cache entry — show empty (run main pipeline first).
-            dets = []
-            if keep_bbs:
-                dets.extend(parse_existing_boxes_and_concepts(row))
-
-        # Annotate each detection with LLM result if available.
-        viz_dets = []
-        for d in dets:
-            d_entry = dict(d)
-            box = d.get("box", [0, 0, 0, 0])
-            box_str = f"[{int(round(box[0]))},{int(round(box[1]))},{int(round(box[2]))},{int(round(box[3]))}]"
-            cls_name = d.get("name", "")
-
-            matched_llm = None
-            for k, v in llm_cache.cache.items():
-                if k.startswith(f"llm:{im_id}:{cls_name}:{box_str}:") and isinstance(v, dict):
-                    matched_llm = v
-                    break
-
-            if matched_llm is not None:
-                d_entry["llm_validated"] = True
-                d_entry["is_valid"] = bool(matched_llm.get("is_valid"))
-                d_entry["reason"] = str(matched_llm.get("reason", "") or "")
-            else:
-                d_entry["llm_validated"] = False
-                d_entry["is_valid"] = True
-                d_entry["reason"] = ""
-            viz_dets.append(d_entry)
-
-        viz_items.append({
-            "im_id": im_id,
-            "im_url": im_url,
-            "detections": viz_dets,
-        })
-
-    output_stem = Path(original_filename).stem
-    viz_filename = dataset_cfg.get("visualization_filename", "visualization.html")
-    html_out = output_dir / viz_filename
-    generate_html_visualization(viz_items, html_out, title=f"Auto-Annotate Visualization — {output_stem}")
-    logger.info("Saved visualization HTML gallery ({} images) to {}", len(viz_items), html_out)
-
-
-@app.command(name="prefetch")
-def prefetch_cache(
-    config_file: str = typer.Argument(..., help="Path to auto-annotate config YAML"),
-):
-    """Pre-download all images in the dataset into the local cache folder.
-
-    Run this command on a machine with VIS/internet access before transferring
-    the repo / cache directory to an isolated GPU server.
-    """
-    cfg = OmegaConf.load(str(config_file))
-    dataset_cfg = cfg.get("dataset", {})
-    df, original_filename = resolve_dataset_csv(dataset_cfg, prefer_azure=True)
-
-    image_col = None
-    for col in ("im_url", "image_url", "url", "image", "original_url"):
-        if col in df.columns:
-            image_col = col
-            break
-
-    if not image_col:
-        raise ValueError(f"Could not find image URL column in dataset. Available: {list(df.columns)}")
-
-    output_dir = Path(dataset_cfg.get("output_dir", REPO_ROOT / "curated_datasets/curation"))
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    custom_cache = dataset_cfg.get("cache_dir")
-    if custom_cache:
-        cache_dir = Path(custom_cache)
-    else:
-        cache_dir = output_dir / "cache"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-
-    urls = df[image_col].dropna().unique()
-    logger.info("Prefetching {} images into cache directory: {}", len(urls), cache_dir)
-
-    success_count = 0
-    for idx, url in enumerate(urls):
-        url_str = str(url).strip()
-        if not url_str:
-            continue
-        img, path_obj = load_image_and_path(url_str, cache_dir)
-        if img is not None:
-            success_count += 1
-        if (idx + 1) % 50 == 0 or (idx + 1) == len(urls):
-            logger.info("Downloaded/cached [{}/{}] images", idx + 1, len(urls))
-
-    logger.info("Prefetch complete. {}/{} images successfully cached in {}", success_count, len(urls), cache_dir)
+    # 9. Generate HTML gallery of the crops sent to the LLM, with validation results.
+    try:
+        from curation.visualize_crops import build_crop_html
+        build_crop_html(str(config_file))
+        logger.info("Generated crop visualization gallery.")
+    except Exception as e:
+        logger.warning("Failed to generate crop visualization gallery: {}", e)
 
 
 @app.command(name="prep-azure")

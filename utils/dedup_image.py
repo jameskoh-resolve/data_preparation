@@ -3,6 +3,7 @@ import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 from loguru import logger
+from path import Path
 
 from utils.vis_image import get_image_content, ImageContentCache
 
@@ -66,3 +67,67 @@ def deduplicate_catalog_by_image(
                 deduped_count, len(df_deduped), initial_len)
                 
     return df_deduped
+
+
+def load_or_compute_exclusion_hashes(
+    exclude_csv: str | Path, 
+    exclude_col: str = "im_name", 
+    max_workers: int = 16
+) -> set[str]:
+    """Load exclusion MD5 hashes from CSV, or compute & save them if missing/empty."""
+    from path import Path
+    exclude_csv_path = Path(exclude_csv)
+    if not exclude_csv_path.exists():
+        logger.warning("Exclusion CSV specified but not found: {}", exclude_csv_path)
+        return set()
+
+    logger.info("Loading exclusion dataset from {}...", exclude_csv_path)
+    exclude_df = pd.read_csv(exclude_csv_path, dtype=str)
+
+    # Check if exclude_col exists and has valid 32-char MD5 hashes
+    valid_hashes = set()
+    if exclude_col in exclude_df.columns:
+        valid_hashes = {
+            val for val in exclude_df[exclude_col].dropna().unique()
+            if len(val) == 32 and all(c in "0123456789abcdefABCDEF" for c in val)
+        }
+
+    if valid_hashes:
+        logger.info("Loaded {} valid image content MD5 hashes from column '{}'.", len(valid_hashes), exclude_col)
+        return valid_hashes
+
+    # Locate URL column to compute hashes
+    url_col = None
+    for c in ("im_url", "original_url", "image_url", "url"):
+        if c in exclude_df.columns:
+            url_col = c
+            break
+
+    if not url_col:
+        logger.warning("No URL column found in {} to extract image hashes.", exclude_csv_path)
+        return set()
+
+    urls = [str(u).strip() for u in exclude_df[url_col].dropna().unique() if str(u).strip().startswith(("http://", "https://"))]
+    logger.info("No pre-computed hashes in '{}' column. Computing image MD5 hashes for {} unique URLs...", exclude_col, len(urls))
+
+    cache = ImageContentCache()
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        hashes = list(executor.map(lambda u: get_image_md5(u, cache=cache), urls))
+
+    url_to_hash = {u: h for u, h in zip(urls, hashes) if h}
+    computed_hashes = set(url_to_hash.values())
+    logger.info("Successfully extracted {} unique image content MD5 hashes.", len(computed_hashes))
+
+    # Persist computed hashes back to CSV
+    if "im_name" not in exclude_df.columns:
+        exclude_df["im_name"] = ""
+    
+    exclude_df["im_name"] = exclude_df[url_col].map(url_to_hash).fillna(exclude_df.get(exclude_col, ""))
+    if exclude_col != "im_name" and exclude_col in exclude_df.columns:
+        exclude_df[exclude_col] = exclude_df["im_name"]
+
+    exclude_df.to_csv(exclude_csv_path, index=False)
+    logger.info("Updated and saved computed hashes back to {}", exclude_csv_path)
+
+    return computed_hashes
+

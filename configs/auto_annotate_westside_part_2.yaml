@@ -16,7 +16,6 @@ dataset:
   path: curated_datasets/TataTrent_Westside/curation/curated_issues_final_part_2.csv
   keep_bounding_boxes: true
   output_dir: output/westside/
-  use_prediction_cache: false 
   # azure_folder: azure_datasets  # (default) where prep-azure writes the Azure CSV
 
 detection_models:

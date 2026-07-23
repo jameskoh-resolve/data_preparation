@@ -31,7 +31,8 @@ CLASSES = [
     "shoe", "top", "product_item", "bottom", "outerwear", "bag", "dress", "eyewear",
     "ethnic_wear", "headwear", "bracelet", "watch", "skirt", "earring", "jewelry_product",
     "scarf", "necklace", "belt", "gloves", "tie", "underwear_bottom", "swimwear",
-    "underwear_top", "ring", "onepiece", "hair_accessories", "head_jewelry", "anklet"
+    "underwear_top", "ring", "onepiece", "hair_accessories", "head_jewelry", "anklet",
+    "innertop"
 ]
 
 DATASET_COLS = ["im_url", "im_name", "im_description", "labels", "boxes", "concepts"]

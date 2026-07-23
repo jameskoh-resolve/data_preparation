@@ -19,6 +19,7 @@ import pandas as pd
 import requests
 import typer
 import yaml
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 from joblib import Parallel, delayed
 from loguru import logger
@@ -35,6 +36,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from utils.vis_image import ImageContentCache, get_image_content
+from utils.dedup_image import load_or_compute_exclusion_hashes
 from llm.executor import LLMExecutor
 from llm.gpt_anno_helpers import BaseAnnotator, annotate_df as llm_annotate_df
 
@@ -127,8 +129,9 @@ def _recognize_single_image(
     tag_group_name: str,
     tag_group_version: str,
     exclude_hashes: set[str] = None,
+    cache: Optional["ImageContentCache"] = None,
 ) -> tuple[str, list[str], str]:
-    content = get_image_content(im_url)
+    content = cache.get(im_url) if cache is not None else get_image_content(im_url)
     if content is None:
         logger.warning("Failed to fetch image {}, skipping", im_url)
         return im_url, [], ""
@@ -181,18 +184,25 @@ def _tag_images(
     unique_urls = batch_df["im_url"].drop_duplicates().tolist()
     logger.info("Tagging {} unique images via virecognition API...", len(unique_urls))
 
+    cache = ImageContentCache()
     results = Parallel(n_jobs=n_jobs)(
-        delayed(_recognize_single_image)(url, tag_group_name, tag_group_version, exclude_hashes)
+        delayed(_recognize_single_image)(url, tag_group_name, tag_group_version, exclude_hashes, cache)
         for url in unique_urls
     )
 
     url_to_tags: dict[str, str] = {}
     new_hashes: list[str] = []
-    
+    seen_in_batch: set[str] = set()
+
     for url, tags, md5_hash in results:
-        url_to_tags[url] = ",".join(tags)
-        if md5_hash:
-            new_hashes.append(md5_hash)
+        if md5_hash and md5_hash in seen_in_batch:
+            # Duplicate content within this batch — mark as deduplicated
+            url_to_tags[url] = "deduplicated"
+        else:
+            url_to_tags[url] = ",".join(tags)
+            if md5_hash:
+                seen_in_batch.add(md5_hash)
+                new_hashes.append(md5_hash)
             
     out = batch_df.copy()
     out["tags"] = out["im_url"].map(url_to_tags).fillna("")
@@ -250,6 +260,57 @@ def _expand_catalog(catalog_cfg: DictConfig, catalog_name: str, seed: int) -> pd
 
 
 @app.command()
+def prefetch(
+    config_file: str = typer.Argument(..., help="Path to class sampler config YAML"),
+    n_jobs: int = typer.Option(4, help="Parallel download workers"),
+) -> None:
+    """Pre-download all catalog images into local ImageContentCache via proxy.
+
+    Run this before `main` to warm the cache so the sampling run does not need
+    the proxy at all.  The cache is file-based and fully resumable — interrupted
+    prefetch runs can be restarted without re-downloading already-cached images.
+    """
+    cfg_path = _resolve_path(config_file)
+    if not cfg_path.exists():
+        logger.error("Config not found: {}", cfg_path)
+        raise SystemExit(1)
+
+    cfg = OmegaConf.load(str(cfg_path))
+    seed = int(cfg.run.seed)
+    catalog_name = str(cfg.run.catalog_name)
+
+    candidates = _expand_catalog(cfg.catalog, catalog_name, seed)
+    urls = candidates["im_url"].drop_duplicates().tolist()
+    logger.info("Found {} unique image URLs to prefetch.", len(urls))
+
+    cache = ImageContentCache()
+
+    def _fetch_one(url: str) -> str:
+        cache_path = cache._url_to_path(url)
+        if cache_path.exists():
+            return "cached"
+        content = cache.get(url)
+        return "ok" if content is not None else "failed"
+
+    ok = cached = failed = 0
+    with ThreadPoolExecutor(max_workers=n_jobs) as executor:
+        futures = {executor.submit(_fetch_one, url): url for url in urls}
+        for future in tqdm(as_completed(futures), total=len(futures), desc="Prefetching images"):
+            result = future.result()
+            if result == "ok":
+                ok += 1
+            elif result == "cached":
+                cached += 1
+            else:
+                failed += 1
+
+    logger.info(
+        "Prefetch complete: {} downloaded, {} already cached, {} failed (out of {} total).",
+        ok, cached, failed, len(urls),
+    )
+
+
+@app.command()
 def main(
     config_file: str = typer.Argument(..., help="Path to class sampler config YAML"),
 ) -> None:
@@ -271,7 +332,14 @@ def main(
     # 1. Load and Shuffle Catalog
     candidates = _expand_catalog(cfg.catalog, catalog_name, seed)
 
-    # Setup configurations
+    # Deduplication & Exclusion filtering (strict image hash matching)
+    dedup_cfg = cfg.get("dedup", {})
+    exclude_hashes: set[str] = set()
+    if dedup_cfg and dedup_cfg.get("exclude_urls_csv"):
+        exclude_csv = _resolve_path(str(dedup_cfg.exclude_urls_csv))
+        exclude_col = str(dedup_cfg.get("exclude_hash_column", "im_name"))
+        n_jobs_dedup = int(cfg.get("tagging", {}).get("n_jobs", 16))
+        exclude_hashes = load_or_compute_exclusion_hashes(exclude_csv, exclude_col, max_workers=n_jobs_dedup)
     tagging_cfg = cfg.get("tagging", {})
     model_config_path = str(tagging_cfg.get("model_config", REPO_ROOT / "configs/tagging_models/fashion_eval_image.yaml"))
     n_jobs = int(tagging_cfg.get("n_jobs", 16))
@@ -308,7 +376,13 @@ def main(
                 must_include_tagged = must_include_df.copy()
                 logger.info("Skipping virecognition tagging for must-include images (tags already present in input).")
             else:
-                must_include_tagged, _ = _tag_images(must_include_df, model_config_path=model_config_path, n_jobs=n_jobs, exclude_hashes=set())
+                must_include_tagged, must_include_hashes = _tag_images(must_include_df, model_config_path=model_config_path, n_jobs=n_jobs, exclude_hashes=exclude_hashes)
+                exclude_hashes.update(must_include_hashes)
+            # Drop images that were flagged as duplicates of the exclusion set or each other
+            dedup_mask = must_include_tagged["tags"] == "deduplicated"
+            if dedup_mask.any():
+                logger.info("Filtered {} deduplicated images from must-include batch.", dedup_mask.sum())
+            must_include_tagged = must_include_tagged[~dedup_mask].copy()
             
             # Step B: LLM Accessory Verification
             must_include_anno = must_include_tagged.copy()
@@ -349,7 +423,7 @@ def main(
     candidate_idx = 0
     round_count = 0
     accepted_count = 0
-    exclude_hashes: set[str] = set()
+    # exclude_hashes was populated above if dedup config exists
 
     while accepted_count < target_size and candidate_idx < len(candidates):
         round_count += 1
@@ -373,28 +447,26 @@ def main(
             tagged, batch_hashes = _tag_images(batch, model_config_path=model_config_path, n_jobs=n_jobs, exclude_hashes=exclude_hashes)
             exclude_hashes.update(batch_hashes)
         
-        # Keep only frontward facing human models
+        # Keep only images with a detected human model
         def passes_tags(tags_str: str) -> bool:
             tags = [t.strip() for t in tags_str.split(",") if t.strip()]
-            has_human = "image_human:model" in tags
-            front_facing = "human_angle:front_view" in tags or "human_angle:front_angled_view" in tags
-            return has_human and front_facing
+            return "image_human:model" in tags
 
-        front_facing_batch = tagged[tagged["tags"].apply(passes_tags)].copy()
-        not_front_facing = tagged[~tagged["tags"].apply(passes_tags)].copy()
+        human_model_batch = tagged[tagged["tags"].apply(passes_tags)].copy()
+        not_human_model = tagged[~tagged["tags"].apply(passes_tags)].copy()
 
-        if not not_front_facing.empty:
-            not_front_facing["reject_reason"] = "not_front_facing_model"
-            rejected_rows.append(not_front_facing)
+        if not not_human_model.empty:
+            not_human_model["reject_reason"] = "not_human_model"
+            rejected_rows.append(not_human_model)
 
-        if front_facing_batch.empty:
-            logger.info("0 front-facing model images in this batch. Continuing...")
+        if human_model_batch.empty:
+            logger.info("0 human model images in this batch. Continuing...")
             continue
 
-        logger.info("Found {} frontward-facing model images. Running LLM verification...", len(front_facing_batch))
+        logger.info("Found {} human model images. Running LLM verification...", len(human_model_batch))
 
         # Step B: LLM Accessory Verification
-        anno_rows = front_facing_batch.copy()
+        anno_rows = human_model_batch.copy()
         anno_rows["available_classes"] = available_classes
         anno_rows["llm_image_source"] = anno_rows["im_url"].astype(str)
 
@@ -411,9 +483,9 @@ def main(
         # Merge results back
         anno_keep_cols = ["im_id", "visible_classes", "gpt_reason"]
         annotated_result = annotated[anno_keep_cols].drop_duplicates(subset=["im_id"], keep="last")
-        front_facing_batch = front_facing_batch.merge(annotated_result, on="im_id", how="left")
-        front_facing_batch["visible_classes"] = front_facing_batch["visible_classes"].fillna("[]")
-        front_facing_batch["gpt_reason"] = front_facing_batch["gpt_reason"].fillna("llm_failed")
+        human_model_batch = human_model_batch.merge(annotated_result, on="im_id", how="left")
+        human_model_batch["visible_classes"] = human_model_batch["visible_classes"].fillna("[]")
+        human_model_batch["gpt_reason"] = human_model_batch["gpt_reason"].fillna("llm_failed")
 
         # Check for accessory presence
         def has_relevant_accessory(vis_classes_str: str) -> bool:
@@ -423,8 +495,8 @@ def main(
             except:
                 return False
 
-        positives = front_facing_batch[front_facing_batch["visible_classes"].apply(has_relevant_accessory)].copy()
-        negatives = front_facing_batch[~front_facing_batch["visible_classes"].apply(has_relevant_accessory)].copy()
+        positives = human_model_batch[human_model_batch["visible_classes"].apply(has_relevant_accessory)].copy()
+        negatives = human_model_batch[~human_model_batch["visible_classes"].apply(has_relevant_accessory)].copy()
 
         # For accepted positives, append detected accessories to 'tags' column for the visualizer
         if not positives.empty:

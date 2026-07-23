@@ -1,0 +1,168 @@
+# Auto-annotate config for catalog_dataset_part_1 (combined catalogs: cos, selectedhomme,
+# aijo_luxe, asos, lyst, veromoda, westside).
+#
+# Run:
+#   PYTHONPATH=. .venv/bin/python curation/auto_annotate.py main configs/auto_annotate_catalog_part_1.yaml
+
+dataset:
+  type: flat csv
+  path: curated_datasets/combined_catalogs/catalog_dataset_part_1/combined.csv
+  # No ground-truth boxes in this dataset — detection starts from scratch.
+  keep_bounding_boxes: false
+  output_dir: output/catalog_dataset_part_1/
+
+detection_models:
+  # Local RTMDet model — full class taxonomy. threshold_llm_validated_low.txt lowers
+  # the confidence threshold to 0.1 for every class covered by llm_validation below
+  # (earring, necklace, bracelet, ring, watch, hair_accessories, belt, tie, gloves,
+  # scarf, headwear, bag, eyewear, innertop, shoe) since the LLM catches false
+  # positives downstream. Classes with no LLM validation keep their original,
+  # higher thresholds since there's no safety net for their false positives.
+  - model_type: fashion_model
+    model_dir: product_item_13_04
+    threshold_file: threshold_llm_validated_low.txt
+    # classes intentionally omitted -> keep every class in the model's taxonomy.
+
+  # Remote locate_anything API — jewelry + shoe only.
+  - model_type: locate_anything
+    api_endpoint: http://localhost:8080/detect_classes
+    decoding_mode: slow
+    use_batch_api: true
+    batch_size: 8
+    max_classes_per_prompt: 15
+    class_groups:
+      - [tie, belt]
+      - [earring, necklace, ring, bracelet]
+      - [shoe, watch]
+    classes: [earring, necklace, bracelet, ring, shoe, tie, belt, watch]
+    class_aliases:
+    # jewelry
+      earring:
+        - earring attached to earlobe
+      necklace:
+        - necklace chain around neck
+      ring:
+        - ring worn on finger
+      bracelet:
+        - bracelet worn on wrist
+    # other
+      tie:
+        - necktie worn around neck
+        - bowtie worn around neck
+      belt:
+        - belt with buckle or clasp worn around waist
+      watch:
+        - timepiece
+      
+
+dedup_policy:
+  general:
+    IOU: 0.7
+    IOMin: 0.7
+    keep_which: keep smallest
+  
+
+llm_validation:
+  model_type: gpt-4.1-mini
+  prompt: llm/prompts/verify_classes_prompt.txt
+  max_boxes_per_image: 12
+  max_boxes_per_class: 6
+  # All 14 classes defined in llm/prompts/identify_classes_prompt_v4.txt, plus 'shoe'
+  # (detected via locate_anything but not defined in v4 — kept with its own task below).
+  classes: [earring, necklace, bracelet, ring, watch, belt, tie, gloves, hair_accessories, scarf, headwear, bag, eyewear, innertop, shoe]
+
+  general:
+    padding: 0.05
+    min_crop_short_side: 224
+    min_crop_long_side: 320
+    upscale_interpolation: lanczos
+    jpeg_quality: 99
+
+  # ── Jewelry ────────────────────────────────────────────────────────────────
+  # Task text below is sourced from the per-class definitions in
+  # llm/prompts/identify_classes_prompt_v4.txt, reworded as verification instructions.
+
+  # dual_crop: large padding/min_box_padding on these classes gives the LLM useful
+  # context (e.g. confirming a ring is on a hand, not a loose object) but can also
+  # pull a second, different jewelry item into frame. Sending an additional tight
+  # crop (near-zero padding) alongside the context crop lets the LLM anchor "the
+  # item" to the tight crop and use the padded crop only for context.
+  earring:
+    flat_padding_px: 120
+    min_box_padding: 200
+    dual_crop: true
+    prompt: llm/prompts/verify_classes_dual_crop_prompt.txt
+    task: "Verify if an earring or other ear jewelry is clearly attached to a person's ear or earlobe. Do NOT mistake hair strands, highlights, or specular spots for earrings."
+
+  necklace:
+    padding: 0.4
+    dual_crop: true
+    prompt: llm/prompts/verify_classes_dual_crop_prompt.txt
+    task: "Verify if there is neck jewelry — a chain, pendant, or choker — clearly visible around a person's neck."
+
+  bracelet:
+    padding: 0.5
+    dual_crop: true
+    prompt: llm/prompts/verify_classes_dual_crop_prompt.txt
+    task: "Verify if there is wrist/arm jewelry — a band, chain, or cuff — visible on a person's wrist or arm."
+
+  ring:
+    flat_padding_px: 80
+    min_box_padding: 160
+    dual_crop: true
+    prompt: llm/prompts/verify_classes_dual_crop_prompt.txt
+    task: "Verify if there is a ring clearly visible worn on a human finger. Do NOT mistake nail polish, skin texture, background objects, or loose standalone objects as a worn ring."
+
+  watch:
+    padding: 0.8
+    dual_crop: true
+    prompt: llm/prompts/verify_classes_dual_crop_prompt.txt
+    task: "Verify if there is a watch worn on a person's wrist AND that a distinct, clearly visible watch face (analog clock face, digital display, or smartwatch screen) is explicitly visible. If the watch face is hidden, turned away, or not clearly visible, mark as INVALID. Do NOT confuse a plain bracelet or bangle with a watch."
+
+  # ── Other accessories ────────────────────────────────────────────────────
+
+  belt:
+    padding: 0.05
+    task: "Verify if there is a clothing belt worn around the waist/hips with a clearly visible buckle, clasp, or other fastening hardware. Do NOT confuse seams, folds, bag straps, jeans/trouser waistbands, or a fabric waist strap/tie on a dress with a belt — a belt must show a distinct fastener, not just a strap."
+
+  tie:
+    padding: 0.05
+    task: "Verify if there is a necktie or bowtie worn around a person's neck."
+
+  gloves:
+    padding: 0.05
+    task: "Verify if there are gloves or mittens covering a person's hand(s)/fingers."
+
+  hair_accessories:
+    padding: 0.8
+    dual_crop: true
+    prompt: llm/prompts/verify_classes_dual_crop_prompt.txt
+    task: "Verify if there is an obvious worn hair accessory on a person (headband, large hairband, bandana, headscarf, hijab). Do NOT count ponytails or hair ties not clearly visible as an accessory product."
+
+  scarf:
+    padding: 0.1
+    task: "Verify if there is a scarf worn around a person's neck/shoulder as a textile accessory. Do NOT confuse a scarf with a collar, lapel, or regular neckline of a top."
+
+  headwear:
+    padding: 0.1
+    task: "Verify if there is a hat, cap, beanie, or balaclava worn on the head. Do NOT classify hair accessories as headwear."
+
+  bag:
+    padding: 0.05
+    task: "Verify if there is a bag, backpack, purse, clutch, or handbag clearly visible."
+
+  eyewear:
+    padding: 0.1
+    task: "Verify if there are glasses, sunglasses, or spectacles clearly visible."
+
+  innertop:
+    padding: 1.3
+    dual_crop: true
+    prompt: llm/prompts/verify_classes_dual_crop_prompt.txt
+    task: "Verify if the item is an innertop — ANY top/shirt/t-shirt/vest worn as an inner layer underneath visible outerwear (such as a jacket, coat, blazer, cardigan, or unbuttoned overshirt). Do NOT classify a standalone top with no visible outer layer as innertop."
+
+  # ── Not defined in identify_classes_prompt_v4.txt — kept as-is ─────────────
+
+  shoe:
+    padding: 0.05
+    task: "Verify if there is a clearly visible shoe, sneaker, boot, sandal, or other footwear on a person's foot/feet."

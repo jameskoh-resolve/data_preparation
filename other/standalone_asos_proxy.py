@@ -34,7 +34,7 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
         return super().do_GET()
 
 if __name__ == '__main__':
-    socketserver.TCPServer.allow_reuse_address = True
-    with socketserver.TCPServer(("", 8000), ProxyHandler) as httpd:
+    socketserver.ThreadingTCPServer.allow_reuse_address = True
+    with socketserver.ThreadingTCPServer(("", 8000), ProxyHandler) as httpd:
         print("Standalone proxy running on http://127.0.0.1:8000")
         httpd.serve_forever()

@@ -8,8 +8,8 @@ catalog:
   csv: catalogs/westside_catalog.csv
   image_url_column: main_image_url
 dedup:
-  exclude_urls_csv: curated_datasets/combined_catalogs/v4/accessory_detect_v4_dataset.csv
-  exclude_hash_column: im_name
+  exclude_urls_csv: curated_datasets/TataTrent_Westside/curation/curated_issues_final_all.csv
+  exclude_hash_column: im_url
 tagging:
   model_config: fashion_eval_image.yaml
   n_jobs: 16

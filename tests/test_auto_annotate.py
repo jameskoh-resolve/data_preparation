@@ -275,36 +275,6 @@ def test_validate_detection_with_llm_upscales_tiny_crop(mock_imencode):
     assert mock_imencode.call_args[0][2] == [int(cv2.IMWRITE_JPEG_QUALITY), 99]
 
 
-@patch("curation.auto_annotate.load_image_and_path")
-def test_prefetch_cache(mock_load_image, tmp_path):
-    from curation.auto_annotate import prefetch_cache
-    import pandas as pd
-
-    df = pd.DataFrame({
-        "im_url": ["http://example.com/img1.jpg", "http://example.com/img2.jpg"]
-    })
-    csv_path = tmp_path / "dataset.csv"
-    df.to_csv(csv_path, index=False)
-
-    cache_dir = tmp_path / "custom_cache"
-
-    cfg_path = tmp_path / "config.yaml"
-    cfg_content = f"""
-dataset:
-  type: flat csv
-  path: {str(csv_path)}
-  cache_dir: {str(cache_dir)}
-  output_dir: {str(tmp_path)}
-"""
-    cfg_path.write_text(cfg_content)
-
-    mock_load_image.return_value = (np.zeros((10, 10, 3), dtype=np.uint8), cache_dir / "img.jpg")
-
-    prefetch_cache(str(cfg_path))
-    assert mock_load_image.call_count == 2
-    assert cache_dir.exists()
-
-
 @patch("curation.auto_annotate.get_image_content")
 @patch("azure.storage.blob.BlobServiceClient")
 @patch("azure.storage.blob.generate_blob_sas")

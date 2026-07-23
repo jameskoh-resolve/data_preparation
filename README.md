@@ -41,19 +41,12 @@ The `curation/auto_annotate.py` script runs object detection (`locate_anything` 
 
 ### 1. Local Preparation (Machine with Internet Access)
 
-Before executing on an isolated GPU server, prepare image access or pre-download dataset images locally:
-
-**Option A: Prepare Azure Blob Storage SAS URLs (Recommended)**
-Uploads images to Azure Blob Storage and generates a SAS-enabled CSV in `azure_datasets/`:
+Before executing on an isolated GPU server, prepare image access by uploading images to Azure Blob Storage and generating a SAS-enabled CSV in `azure_datasets/`:
 ```bash
 PYTHONPATH=. .venv/bin/python curation/auto_annotate.py prep-azure configs/auto_annotate_westside_part_2.yaml
 ```
 
-**Option B: Pre-download Images into Local Cache**
-Pre-downloads image binaries directly into the local `cache/` directory:
-```bash
-PYTHONPATH=. .venv/bin/python curation/auto_annotate.py prefetch configs/auto_annotate_westside_part_2.yaml
-```
+`main` downloads and caches each image locally (in `<output_dir>/cache/image_cache/`) as it processes the dataset, so no separate prefetch step is needed.
 
 ---
 
@@ -82,7 +75,7 @@ The script automatically detects the prepared CSV in `azure_datasets/` and outpu
 
 Use this when you want to run detection-heavy work on Azure first, then run the LLM-heavy pass locally while reusing cache.
 
-1. Run detection-only on Azure (fills detector cache keys in `predictions_cache.json`):
+1. Run detection-only on Azure (fills detector cache keys in `detections_cache.json`):
 ```bash
 PYTHONPATH=. .venv/bin/python curation/auto_annotate.py main configs/auto_annotate_westside_part_2.yaml --mode detection_only
 ```
@@ -93,10 +86,10 @@ PYTHONPATH=. .venv/bin/python curation/auto_annotate.py main configs/auto_annota
 ```
 
 Notes:
-- Keep only one running process writing to the same cache file at a time.
+- Keep only one running process writing to the same cache files at a time.
 - `detection_only` writes `<dataset>_detections_only.csv`.
 - `full` writes `<dataset>_annotated.csv`.
-- The same `output/.../cache/predictions_cache.json` stores both detector (`det:*`) and LLM (`llm:*`) cache entries.
+- `output/.../cache/detections_cache.json`, `processed_cache.json`, and `llm_cache.json` are shared between both passes.
 
 ### 3c. Commands vs Modes (CLI Usage)
 
@@ -104,45 +97,66 @@ The auto-annotate CLI has two layers:
 
 1. **Command layer** (subcommands)
 - `prep-azure`: prepares/uploads images and writes Azure SAS CSV.
-- `prefetch`: pre-downloads images into local cache.
-- `main`: runs the annotation pipeline.
-- `visualize`: generates/refreshes the interactive HTML visualization gallery.
+- `main`: runs the annotation pipeline (detection + dedup + LLM validation) and automatically (re)generates the CSV, `visualization.html`, `crops/`, and `crops.html` outputs at the end of every run — no separate command needed.
 
 2. **Mode layer** (only used with `main`)
 - `--mode full`: detection + dedup + LLM validation.
-- `--mode detection_only`: detection + dedup only.
+- `--mode detection_only`: detection + dedup only (skips CSV/HTML/crop generation).
 
 Examples:
 ```bash
 PYTHONPATH=. .venv/bin/python curation/auto_annotate.py prep-azure configs/auto_annotate_westside_part_2.yaml
-PYTHONPATH=. .venv/bin/python curation/auto_annotate.py prefetch configs/auto_annotate_westside_part_2.yaml
 PYTHONPATH=. .venv/bin/python curation/auto_annotate.py main configs/auto_annotate_westside_part_2.yaml --mode detection_only
 PYTHONPATH=. .venv/bin/python curation/auto_annotate.py main configs/auto_annotate_westside_part_2.yaml --mode full
-PYTHONPATH=. .venv/bin/python curation/auto_annotate.py visualize configs/auto_annotate_westside_part_2.yaml
 ```
 
 ---
 
 ### Interactive HTML Visualization Gallery
 
-Every `main` run automatically generates a self-contained HTML gallery in your output directory (e.g. `output/westside/visualization.html` & `output/westside/<dataset>_visualization.html`).
+Every `main` run automatically (re)generates two self-contained HTML galleries in your output directory, purely from cache if the images/detections/LLM results are already cached (no re-running inference or API calls needed):
 
-- **Toggle `LLM Filtered`**: Easily toggle between showing **final LLM-validated boxes** and **raw model candidate boxes** (with LLM-rejected boxes highlighted via red dashed borders).
-- **Search & Filter**: Filter by class concept, LLM status (validated vs rejected), image ID, or prompt reason.
-- **Detail Modal**: Click any image card to open a full-screen inspector with class tags, box coordinates, and LLM explanation reasons.
-- **Stand-alone Command**: You can re-generate the gallery at any time without running inference using:
-  ```bash
-  PYTHONPATH=. .venv/bin/python curation/auto_annotate.py visualize <path/to/config.yaml>
-  ```
+- **`visualization.html`**: the full dataset gallery.
+  - **Toggle `LLM Filtered`**: Easily toggle between showing **final LLM-validated boxes** and **raw model candidate boxes** (with LLM-rejected boxes highlighted via red dashed borders).
+  - **Search & Filter**: Filter by class concept, LLM status (validated vs rejected), image ID, or prompt reason.
+  - **Detail Modal**: Click any image card to open a full-screen inspector with class tags, box coordinates, and LLM explanation reasons.
+- **`crops.html`**: a gallery of the exact crops sent to the LLM, alongside its validation result and reason, for reviewing LLM verification quality.
+
+---
+
+### Interactive Review GUI
+
+For manually correcting/extending detections (approve, reject, hide/show, or draw new boxes), use the browser-based review tool:
+```bash
+PYTHONPATH=. .venv/bin/python curation/review_gui.py main configs/auto_annotate_westside_part_2.yaml
+PYTHONPATH=. .venv/bin/python curation/review_gui.py main configs/auto_annotate_westside_part_2.yaml --port 7654
+```
+
+- **Grid (batch) view**: shows as many image thumbnails at once as fit your screen resolution (e.g. ~12 on a typical laptop display), each with its bounding boxes drawn. Click a thumbnail to open the detail view for that image.
+- **Colors**: green = valid, red = invalid (LLM rejected, including blurry-flagged boxes), violet = new (human-added). Invalid boxes are **hidden by default** on both the grid and detail view.
+- **Hotkeys**: `A`/`D` (or `←`/`→`) prev/next batch (grid view) or prev/next image (detail view), `Space` show/hide **all** invalid boxes at once (grid + detail view), `Enter` approve selected box, `X` reject selected box, `Esc` back to grid view.
+- Individual boxes are shown/hidden by clicking their **Hide/Show** button in the detail view's box list (not via keyboard).
+- **Click-drag** on the canvas (detail view) to draw a new box (select a class from `classes.txt` in the right panel first).
+- Decisions are saved to `<cache_dir>/human_review.json`. **Saving alone does not change any dataset CSV** — run the `export` command below to apply your decisions.
+
+Once you're done reviewing, apply your decisions to produce a final corrected CSV (this does not modify the original `{dataset}_annotated.csv`):
+```bash
+PYTHONPATH=. .venv/bin/python curation/review_gui.py export configs/auto_annotate_westside_part_2.yaml
+```
+This writes `{dataset}_human_reviewed.csv` to your output directory. Per box: an explicit **reject** excludes it, an explicit **approve** includes it (overriding the LLM verdict), and boxes with no explicit decision are included iff the LLM (or lack of LLM validation) already marked them valid. Hiding a box in the review UI is only a visibility toggle and does not exclude it. Boxes you drew manually are always included.
+
 
 ---
 
 ### Prediction & Image Caching
 
-- **Image Cache**: Downloaded images are cached locally as MD5-named `.jpg` files in `<output_dir>/cache/`. Subsequent runs re-use cached images without re-downloading them.
-- **Prediction Cache**: Detector outputs (`locate_anything` / `fashion_model`) and LLM verification results (`gpt-4.1-mini`) are automatically cached in `<output_dir>/cache/predictions_cache.json`.
-- **Resuming Runs**: If a pipeline run is interrupted or re-executed, all previously completed detections and LLM verification calls are instantly re-used from `predictions_cache.json` without incurring duplicate API costs or latency.
-- **Cache Control**: Prediction caching is enabled by default (`use_prediction_cache: true`). To bypass caching for a fresh run, set `use_prediction_cache: false` under `dataset:` in your config YAML or delete `predictions_cache.json`.
+- **Image Cache**: Downloaded images are cached locally as MD5-named `.jpg` files in `<output_dir>/cache/image_cache/`. Subsequent runs re-use cached images without re-downloading them.
+- **Prediction Cache**: Cached separately per pipeline stage in `<output_dir>/cache/`:
+  - `detections_cache.json` — raw detector outputs (`locate_anything` / `fashion_model`).
+  - `processed_cache.json` — post-dedup, post-enforce-area detections (the GPU1 → GPU2 handoff for the two-pass workflow).
+  - `llm_cache.json` — LLM verification results (`is_valid` + `reason`) per box.
+- **Resuming Runs**: If a pipeline run is interrupted or re-executed, all previously completed detections and LLM verification calls are instantly re-used from cache without incurring duplicate API costs or latency.
+- **Cache Control**: Cache reuse is enabled by default (`reuse_cache: true`). To bypass caching for a fresh run, set `reuse_cache: false` under `dataset:` in your config YAML or delete the relevant cache files (`detections_cache.json`, `processed_cache.json`, `llm_cache.json`) from the cache directory.
 
 ---
 

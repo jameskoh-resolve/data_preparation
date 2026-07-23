@@ -184,6 +184,18 @@ def read_image_from_url(input_url: str):
     return image
 
 
+from curl_cffi import requests as cffi_requests
+from typing import Optional
+
+ASOS_HEADERS = {
+    "Referer": "https://www.asos.com/",
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+    ),
+    "Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8",
+}
+
 def get_image_content(
     im_url: str | bytes,
     timeout: int = 10,
@@ -193,23 +205,28 @@ def get_image_content(
     Returns None if fetching or encoding fails.
     """
 
-    # if content is an url
+    # if content is a URL
     if isinstance(im_url, str) and im_url.startswith("http"):
         try:
-            # --- ASOS Proxy Routing ---
             if "asos-media.com" in im_url or "asos.com" in im_url:
-                import urllib.parse
-                im_url = f"https://rely-conflict-desecrate.ngrok-free.dev/image-proxy/?url={urllib.parse.quote(im_url)}"
-            # --------------------------
-            headers = _get_image_request_headers(im_url)
-            import urllib3
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-            resp = requests.get(im_url, timeout=timeout, headers=headers, verify=False)
+                # Akamai fingerprints TLS/HTTP2, not just headers —
+                # curl_cffi impersonates real Chrome to get past it.
+                resp = cffi_requests.get(
+                    im_url,
+                    impersonate="chrome124",
+                    headers=ASOS_HEADERS,
+                    timeout=timeout,
+                )
+            else:
+                headers = _get_image_request_headers(im_url)
+                resp = requests.get(im_url, timeout=timeout, headers=headers)
+
             resp.raise_for_status()
             content = resp.content
         except Exception as e:
             logger.error("Failed to fetch/encode image {}: {}", im_url, e)
             return None
+
     # local file path
     elif isinstance(im_url, str):
         local_path = Path(im_url)
@@ -221,6 +238,7 @@ def get_image_content(
         except Exception as e:
             logger.error("Failed to read local image {}: {}", im_url, e)
             return None
+
     # if content is already bytes (e.g., from cache)
     elif isinstance(im_url, bytes):
         content = im_url
